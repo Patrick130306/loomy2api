@@ -1,0 +1,27 @@
+{
+  "_comment": "Copy to accounts.json (it is gitignored — it holds passwords). Sessions are filled in automatically after login.",
+
+  "accounts": [
+    {
+      "name": "main",
+      "loginid": "13800000000",
+      "password": "your-password",
+      "enabled": true
+    },
+    {
+      "_comment": "A second account. Give it credentials for unattended renewal, or paste a session you exported elsewhere (then leave password out).",
+      "name": "backup",
+      "loginid": "13900000000",
+      "password": "another-password",
+      "enabled": true
+    },
+    {
+      "_comment": "Session-only account: no password, expires after 14 days and must be refreshed manually.",
+      "name": "borrowed",
+      "session": "paste-a-32-char-session-here",
+      "userid": "1234567890",
+      "expireAt": 0,
+      "enabled": false
+    }
+  ]
+}

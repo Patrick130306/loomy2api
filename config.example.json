@@ -1,0 +1,47 @@
+{
+  "_comment": "Copy to config.json and edit. Every key is optional — defaults live in loomy2api/config.py. Environment variables override this file (see README).",
+
+  "host": "127.0.0.1",
+  "port": 17890,
+
+  "upstream": "https://loomyad.xunfei.cn/api/v1",
+  "account_base": "https://account.xfinfr.com",
+  "account_appid": "GM3LOOMY",
+
+  "_access_key": "Leave empty to use the constants shipped with the official client. Override if your client ships a different pair.",
+  "access_key_id": "",
+  "access_key_secret": "",
+
+  "loomy_version": "0.9.38",
+  "_proxy": "empty = direct connection (recommended for these domestic endpoints)",
+  "proxy": "",
+
+  "_api_keys": "empty list = the gateway needs no key. Set e.g. [\"sk-abc\"] to require Bearer/x-api-key.",
+  "api_keys": [],
+
+  "default_model": "deepseek-v4-flash-0731",
+  "_model_aliases": "map common client model names onto real upstream ids",
+  "model_aliases": {
+    "gpt-4o": "deepseek-v4-flash-0731",
+    "gpt-4o-mini": "qwen3.8-flash",
+    "gpt-4-1106-preview": "deepseek-v4-flash-0731",
+    "claude-3-5-sonnet": "Kimi-k2.6",
+    "claude-sonnet-4-5": "MiniMax-M3"
+  },
+
+  "timeout": 1200,
+  "request_purpose": "chat.message",
+  "log_dir": "logs",
+  "log_requests": true,
+  "log_console": true,
+  "strip_model_prefix": true,
+
+  "_pool": "accounts_file holds your accounts (gitignored). strategy: balance | round_robin | lru",
+  "accounts_file": "accounts.json",
+  "strategy": "balance",
+  "max_retries": 2,
+  "cooldown_seconds": 300,
+  "session_renew_before_days": 3,
+  "quota_refresh_minutes": 30,
+  "sessions_from_client": true
+}

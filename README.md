@@ -1,0 +1,243 @@
+# loomy2api
+
+Turn the model quota of your **Loomy** (iFlytek / 科大讯飞 desktop AI assistant)
+account into a plain, self-hosted **OpenAI- and Anthropic-compatible API** —
+with a **multi-account pool** for rotation, failover and automatic session
+renewal.
+
+* **Zero dependencies** — pure Python standard library (3.9+). No `pip install`
+  needed beyond the project itself.
+* **No desktop client required** — the gateway logs in server-side with a phone
+  number + password and keeps the 14-day session renewed on its own.
+* **Multi-account** — add as many accounts as you like; requests are routed by
+  balance / round-robin / LRU, dead sessions are cooled down and retried on the
+  next account automatically.
+* **Both API dialects** — `/v1/chat/completions` for OpenAI clients and
+  `/v1/messages` for Claude Code & friends (streaming, tools and reasoning all
+  translated).
+
+[中文说明 / Chinese README](README.zh-CN.md) · [Reversed protocol reference](docs/PROTOCOL.md)
+
+---
+
+## Features
+
+| | |
+|---|---|
+| OpenAI API | `POST /v1/chat/completions` (stream + non-stream), `GET /v1/models`, `POST /v1/embeddings`, `POST /v1/images/generations` |
+| Anthropic API | `POST /v1/messages` (stream + non-stream), thinking blocks, tool use / tool results |
+| Accounts | pool with `balance` · `round_robin` · `lru` strategies, per-account cooldown, automatic retry on another account, quota tracking |
+| Sessions | password login, SMS login, desktop-client session import, automatic renewal before the 14-day expiry |
+| Ops | `/health`, `/v1/points`, `/v1/admin/accounts`, request log with model / tokens / `points_consumed` / latency |
+| Security | optional API-key gate for the gateway itself; secrets stay out of git |
+
+## Requirements
+
+* Python **3.9+** (tested on 3.9 / 3.11 / 3.13, Windows and Linux)
+* A Loomy account (phone number + a password set in the iFlytek account centre)
+* Outbound HTTPS to `account.xfinfr.com` and `loomyad.xunfei.cn`
+
+## Quick start
+
+```bash
+git clone https://github.com/<you>/loomy2api.git
+cd loomy2api
+
+cp config.example.json config.json        # optional, defaults are sane
+cp accounts.example.json accounts.json    # put your accounts here
+
+# add an account and log it in (writes the session into accounts.json)
+python -m loomy2api add main --phone 13800000000 --password 'your-password'
+python -m loomy2api accounts              # check sessions + quota
+
+python -m loomy2api serve                 # http://127.0.0.1:17890
+```
+
+Point any OpenAI-compatible client at it:
+
+```bash
+curl http://127.0.0.1:17890/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "deepseek-v4-flash-0731",
+       "messages": [{"role": "user", "content": "hello"}]}'
+```
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://127.0.0.1:17890/v1", api_key="not-needed")
+print(client.chat.completions.create(
+    model="gpt-4o-mini",                      # aliases are configurable
+    messages=[{"role": "user", "content": "hi"}],
+).choices[0].message.content)
+```
+
+Claude Code / any Anthropic client:
+
+```bash
+export ANTHROPIC_BASE_URL=http://127.0.0.1:17890
+export ANTHROPIC_API_KEY=not-needed
+```
+
+> The base URL for the Anthropic dialect is the bare host — the gateway serves
+> `/v1/messages` at the root, just like the real API.
+
+## Multi-account pool
+
+`accounts.json` (gitignored) looks like this:
+
+```json
+{
+  "accounts": [
+    { "name": "main",   "loginid": "13800000000", "password": "…", "enabled": true },
+    { "name": "backup", "loginid": "13900000000", "password": "…", "enabled": true },
+    { "name": "shared", "session": "<32-char session>", "userid": "…", "expireAt": 0 }
+  ]
+}
+```
+
+* **Password accounts** renew themselves. A background thread checks every
+  `quota_refresh_minutes` and re-logs in whenever a session has less than
+  `session_renew_before_days` (default 3) left — a pool runs unattended.
+* **Session-only accounts** work too (handy for sharing accounts with someone
+  else), but they expire after 14 days and need `loomy2api login` again.
+* **Client import** — if the Loomy desktop app is installed and logged in, its
+  session is picked up automatically as an extra account
+  (`sessions_from_client: true`).
+
+Routing:
+
+| strategy | behaviour |
+|---|---|
+| `balance` (default) | use the account with the most available points |
+| `round_robin` | cycle in order |
+| `lru` | least recently used first |
+
+On `401/403` the session is dropped, on `402`/quota exhaustion the account is
+cooled down for `cooldown_seconds`, and the request is retried on the next
+account (`max_retries`). Everything is visible in `GET /v1/admin/accounts`.
+
+## Model catalogue
+
+Whatever the upstream returns from `/models` is exposed as-is, plus any aliases
+you configure. Typical catalogue (the multiplier is the points cost factor —
+`spark-x` at `x0.1` is by far the cheapest):
+
+| id | multiplier | notes |
+|---|---|---|
+| `spark-x` | x0.1 | Spark X2.5, text + reasoning |
+| `GLM-5.3-Flash` | x0.8 | vision / video / tools |
+| `qwen3.8-flash` | x0.8 | vision / video / tools |
+| `deepseek-v4-flash-0731` | x3.0 | 1M context, tools |
+| `mimo-v2.5` | x3.3 | audio / image / video |
+| `MiniMax-M3` | x4.0 | vision / video |
+| `Kimi-k2.6` | x6.5 | vision / video |
+| `qwen-3.8-max` | x12.0 | strongest, priciest |
+| `Hy-Image-3.5-preview`, `doubao-seedream-5-lite`, `qwen-image-3.0-pro` | — | image generation |
+
+## Configuration
+
+`config.json` (all keys optional) — see `config.example.json` for comments.
+Environment variables override it:
+
+| env | meaning |
+|---|---|
+| `LOOMY_HOST` / `LOOMY_PORT` | listen address |
+| `LOOMY_UPSTREAM` | model gateway base URL |
+| `LOOMY_ACCOUNT_BASE` | account service base URL |
+| `LOOMY_AK_ID` / `LOOMY_AK_SECRET` | override the client-shipped signing keys |
+| `LOOMY_API_KEYS` | comma-separated gateway keys (`[]` = no auth) |
+| `LOOMY_DEFAULT_MODEL` | fallback model |
+| `LOOMY_ACCOUNTS_FILE` / `LOOMY_LOG_DIR` | state locations |
+| `LOOMY_PROXY` | e.g. `http://127.0.0.1:7877` (default: direct) |
+| `LOOMY_STRATEGY` | `balance` / `round_robin` / `lru` |
+
+### Protecting the gateway
+
+```json
+{ "api_keys": ["sk-local-whatever"] }
+```
+
+Clients then send `Authorization: Bearer sk-local-whatever` or
+`x-api-key: sk-local-whatever`. `/health` stays public for probes.
+
+## Docker
+
+```bash
+docker build -t loomy2api .
+docker run -d --name loomy2api -p 17890:17890 -v $PWD/data:/data loomy2api
+# put accounts.json in ./data (mounted as /data/accounts.json)
+```
+
+## CLI
+
+```
+loomy2api serve                 start the gateway
+loomy2api accounts              pool status: quota, session days left, cooldown
+loomy2api add <name> --phone … --password …
+loomy2api remove <name>
+loomy2api login [name …]        log in / force-refresh sessions
+loomy2api sms <phone>           send an SMS code (SMS login path)
+loomy2api verify <name> <phone> <code> <msgid>
+loomy2api models                list the upstream catalogue
+loomy2api quota                 per-account points
+loomy2api chat "prompt"         one-shot request through a pooled account
+```
+
+## How it works
+
+The Loomy desktop client is an Electron app whose **main-process sources ship
+unencrypted** in `resources/app.asar.unpacked/electron/`, and whose provider is
+configured with `useSessionAuth: true` — i.e. it stores no API key and simply
+sends the login session as the bearer token. The iFlytek account service is a
+plain signed HTTP API (HMAC-SHA1), and its password login turns out to be fully
+scriptable because the `rcode` handed out with the RSA key is a server nonce,
+not a CAPTCHA.
+
+So this project is: log in over the account service → hold the 14-day session →
+forward OpenAI/Anthropic requests to the model gateway with that session.
+
+The complete write-up (endpoints, signing string, error fingerprints, quota
+ledger, client config encryption) is in **[docs/PROTOCOL.md](docs/PROTOCOL.md)**.
+
+## Tests
+
+```bash
+python -m unittest discover -s tests -t . -v
+```
+
+Hermetic: a local fake upstream stands in for both the account service and the
+model gateway, so the suite never touches a real account and burns no points.
+CI runs it on Linux and Windows across Python 3.9/3.11/3.13.
+
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| `账号池里没有可用账号` | `accounts.json` empty, all accounts disabled, or all in cooldown |
+| `... session 不可用且没有账号密码` | add `loginid` + `password`, or run `loomy2api sms` + `loomy2api verify` |
+| `getPuKey ... HMAC signature does not match` | your `access_key_secret` is wrong/truncated — leave it empty to use the built-in client constants |
+| upstream hangs until timeout | something stripped the `traceparent` header |
+| `402` / point exhaustion | top the account up, or add another account to the pool |
+| two instances fighting over one port (Windows) | Windows allows duplicate `SO_REUSEADDR` binds — check `netstat -ano \| findstr 17890` and kill the stale PID |
+
+## Notes & risks
+
+* Every request is billed to the account's points (`balance` + a daily grant),
+  exactly like the official client. Watch `GET /v1/points`.
+* The upstream account system is real: don't hammer the login endpoint, and
+  avoid scripts that retry logins aggressively.
+* Use it on accounts you own. Sharing one account across many people increases
+  the chance of rate limiting or a ban.
+
+## Disclaimer
+
+This project is unaffiliated with iFlytek / 科大讯飞. It exists for
+interoperability and personal use with your own account. The signing constants
+in `loomy2api/constants.py` are the ones the official client ships in every
+installation; they are used only to talk to the account service. Do not use
+this project to abuse, resell or overload the upstream service.
+
+## License
+
+[MIT](LICENSE)

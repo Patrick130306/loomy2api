@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loomy2api"
+version = "1.0.0"
+description = "Turn the Loomy (iFlytek) desktop assistant quota into an OpenAI/Anthropic-compatible local API gateway, with a multi-account pool."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+dependencies = []          # zero runtime dependencies: pure standard library
+
+[project.optional-dependencies]
+# Only needed if you want to decrypt the client's own .env.prod instead of using
+# the built-in client constants / your own config values.
+client-env = ["cryptography>=41"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+loomy2api = "loomy2api.cli:main"
+
+[tool.setuptools]
+packages = ["loomy2api"]
+
+[tool.setuptools.package-data]
+loomy2api = ["py.typed"]

@@ -1,0 +1,29 @@
+# ---- runtime / secrets (never commit) ----
+config.json
+accounts.json
+session.json
+credentials.json
+logs/
+*.log
+_decrypt_env.cjs
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ---- editors / os ----
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# prototype single-file scripts (kept locally, not published)
+legacy/
