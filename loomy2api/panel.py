@@ -1,12 +1,16 @@
 """Web control panel: HTML page + JSON API.
 
 The page is a single self-contained HTML file (no CDN, no build step) served at
-``/panel``; the JSON API lives under ``/api/panel/*`` and reuses the gateway's
-API-key gate when ``api_keys`` is configured.
+``/panel``. When ``api_keys`` is set, anonymous visitors get ``login.html``
+instead, and the JSON API accepts either the gateway key or the panel session
+cookie.
 
 Endpoints
 ---------
-``GET  /panel``                       the page
+``GET  /panel``                       the page, or the login form
+``POST /api/panel/login``             trade an API key for a session cookie
+``POST /api/panel/logout``            drop that cookie
+``GET  /api/panel/session``           ``{auth_required, authenticated}`` only
 ``GET  /api/panel/state``             accounts + quota + totals (``?refresh=1``
                                       forces a quota refresh)
 ``POST /api/panel/refresh``           refresh every account's quota
@@ -31,6 +35,7 @@ __all__ = ["Panel"]
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 PANEL_HTML = WEB_DIR / "index.html"
+LOGIN_HTML = WEB_DIR / "login.html"
 
 #: Hidden phone number for the panel: 138****0000
 def mask_phone(value: str) -> str:
@@ -58,6 +63,12 @@ class Panel:
             return PANEL_HTML.read_bytes()
         except OSError:                                  # pragma: no cover
             return b"<h1>loomy2api</h1><p>panel asset missing</p>"
+
+    def login_html(self) -> bytes:
+        try:
+            return LOGIN_HTML.read_bytes()
+        except OSError:                                  # pragma: no cover
+            return b"<h1>loomy2api</h1><p>login asset missing</p>"
 
     def _account_view(self, acc: Account) -> Dict[str, Any]:
         view = acc.public_dict()

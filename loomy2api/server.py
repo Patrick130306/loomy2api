@@ -16,6 +16,7 @@ from typing import Any, Dict, Optional, Tuple
 from . import constants as C
 from . import anthropic as anth
 from .panel import Panel
+from .panel_auth import PanelSessions, api_key_ok, clear_cookie, set_cookie
 from .pool import AccountPool, PoolError
 from .upstream import ModelGateway, sse_usage, human_usage
 
@@ -54,6 +55,7 @@ class Gateway:
         self.pool = AccountPool(cfg, logger=self.log)
         self.models_client = ModelGateway(cfg)
         self.panel = Panel(self)
+        self.sessions = PanelSessions()
         self.models: list = []
         self._models_lock = threading.Lock()
 
@@ -204,14 +206,51 @@ class Handler(BaseHTTPRequestHandler):
 
     # --------------------------------------------------------------- auth
 
+    def _presented_key(self) -> str:
+        auth = self.headers.get("Authorization") or ""
+        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
+        return token or (self.headers.get("x-api-key") or "").strip()
+
     def _authorized(self) -> bool:
+        """Bearer / x-api-key gate for the model API. Panel cookies do not pass."""
         keys = self.gateway.cfg.api_keys
         if not keys:
             return True
-        auth = self.headers.get("Authorization") or ""
-        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        token = token or (self.headers.get("x-api-key") or "").strip()
-        if token in keys:
+        if api_key_ok(self._presented_key(), keys):
+            return True
+        self._error(401, "无效的 API Key / invalid API key", "authentication_error")
+        return False
+
+    def _panel_cookie(self) -> str:
+        raw = self.headers.get("Cookie") or ""
+        for part in raw.split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == PanelSessions.COOKIE:
+                return value.strip()
+        return ""
+
+    def _cookie_secure(self) -> bool:
+        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip().lower()
+        return proto == "https"
+
+    def _client_ip(self) -> str:
+        peer = self.client_address[0] if self.client_address else ""
+        # Behind the local reverse proxy every peer is loopback; the real
+        # client is the first X-Forwarded-For hop Caddy (or similar) set.
+        if peer in ("127.0.0.1", "::1"):
+            forwarded = (self.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
+            if forwarded:
+                return forwarded
+        return peer or "unknown"
+
+    def _panel_authorized(self) -> bool:
+        """Panel JSON: gateway key or the login session. Not the model API."""
+        keys = self.gateway.cfg.api_keys
+        if not keys:
+            return True
+        if api_key_ok(self._presented_key(), keys):
+            return True
+        if self.gateway.sessions.valid(self._panel_cookie()):
             return True
         self._error(401, "无效的 API Key / invalid API key", "authentication_error")
         return False
@@ -233,9 +272,14 @@ class Handler(BaseHTTPRequestHandler):
         path = self._path()
         if path in ("/v1/health", "/health"):
             return self._health()
+        if path == "/api/panel/session":
+            return self._panel_session()
         if path in ("/panel", "/", "/index.html"):
             return self._panel_page()
-        if not self._authorized():
+        if path.startswith("/api/panel/"):
+            if not self._panel_authorized():
+                return
+        elif not self._authorized():
             return
         try:
             if path == "/v1/models":
@@ -261,7 +305,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):                                # noqa: N802
         path = self._path()
-        if not self._authorized():
+        if path == "/api/panel/login":
+            return self._panel_login()
+        if path == "/api/panel/logout":
+            return self._panel_logout()
+        if path.startswith("/api/panel/"):
+            if not self._panel_authorized():
+                return
+        elif not self._authorized():
             return
         try:
             if path == "/v1/chat/completions":
@@ -294,13 +345,61 @@ class Handler(BaseHTTPRequestHandler):
     # ------------------------------------------------------------- panel
 
     def _panel_page(self) -> None:
-        body = self.gateway.panel.html()
+        signed_in = self.gateway.sessions.valid(self._panel_cookie())
+        if self.gateway.cfg.api_keys and not signed_in:
+            body = self.gateway.panel.login_html()
+        else:
+            body = self.gateway.panel.html()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _panel_session(self) -> None:
+        required = bool(self.gateway.cfg.api_keys)
+        signed_in = self.gateway.sessions.valid(self._panel_cookie())
+        return self._json(200, {
+            "ok": True,
+            "auth_required": required,
+            "authenticated": (not required) or signed_in,
+        })
+
+    def _panel_login(self) -> None:
+        if not self.gateway.cfg.api_keys:
+            return self._error(400, "面板未开启登录 / panel login is not configured")
+        ip = self._client_ip()
+        sessions = self.gateway.sessions
+        if sessions.locked(ip):
+            return self._error(429, "尝试过于频繁，请稍后再试 / too many attempts",
+                               "rate_limit_error")
+        try:
+            payload = self._read_json()
+        except ValueError as exc:
+            return self._error(400, str(exc))
+        presented = str(payload.get("api_key") or payload.get("key") or "").strip()
+        if not api_key_ok(presented, self.gateway.cfg.api_keys):
+            if sessions.note_failure(ip):
+                return self._error(429, "尝试过于频繁，请稍后再试 / too many attempts",
+                                   "rate_limit_error")
+            return self._error(401, "无效的 API Key / invalid API key",
+                               "authentication_error")
+        sessions.clear_failures(ip)
+        token = sessions.issue()
+        return self._json(200, {"ok": True}, extra={
+            "Set-Cookie": set_cookie(token, secure=self._cookie_secure(),
+                                     max_age=sessions.TTL),
+            "Cache-Control": "no-store",
+        })
+
+    def _panel_logout(self) -> None:
+        token = self._panel_cookie()
+        self.gateway.sessions.revoke(token)
+        return self._json(200, {"ok": True}, extra={
+            "Set-Cookie": clear_cookie(secure=self._cookie_secure()),
+            "Cache-Control": "no-store",
+        })
 
     def _panel_api(self, path: str) -> None:
         payload = self._read_json()

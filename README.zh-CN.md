@@ -121,8 +121,11 @@ export ANTHROPIC_API_KEY=随便填
 * **重绑设备标识**（见下一节）
 * 实时日志尾巴，可自动刷新
 
-如果配置了 `api_keys`，面板的接口就需要这个 Key（页面本身保持公开，方便你填 Key），
-Key 存在浏览器 localStorage 里。
+如果配置了 `api_keys`，打开 `/` 或 `/panel` 会先看到登录页，用这把 Key 登录。
+浏览器只保存一个 HttpOnly 会话 Cookie，不保存 Key 本身，也不再写入
+`localStorage`。这张 Cookie 只能访问 `/api/panel/*`。模型客户端仍然发送
+`Authorization: Bearer` 或 `x-api-key`；面板会话访问 `/v1/*` 会被拒绝。
+不配置 `api_keys` 时面板保持开放，只适合本机使用。
 
 ## 账号设备标识（指纹）
 
@@ -203,7 +206,7 @@ Key 存在浏览器 localStorage 里。
 ```
 
 客户端带 `Authorization: Bearer sk-local-whatever` 或 `x-api-key: sk-local-whatever`。
-`/health` 始终公开，方便探活。
+面板登录页填的也是这把 Key。`/health` 始终公开，方便探活。
 
 ## Docker
 
@@ -321,11 +324,13 @@ docker compose logs -f
 
 默认只监听 `127.0.0.1`，只有本机能访问。要在局域网/公网共享：
 
-1. **先设 API Key**。不设的话，谁能连上这个端口就能花你账号的积分：
+1. **先设 API Key**。不设的话，谁能连上这个端口就能花你账号的积分，面板也没有登录页：
 
    ```json
    { "api_keys": ["sk-换成一串又长又随机的字符串"] }
    ```
+
+   设好之后打开站点会先进入登录页。Key 只用来核对，不会留在浏览器里。
 2. 再设 `LOOMY_HOST=0.0.0.0`（或 config.json 里 `"host": "0.0.0.0"`）。
 3. 公网的话，前面挂一个带 TLS 的反代。Caddy 示例：
 

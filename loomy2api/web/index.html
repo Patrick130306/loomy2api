@@ -74,12 +74,11 @@
   <header>
     <h1>loomy2api<span>控制面板 / control panel</span></h1>
     <div class="row">
-      <input id="apiKey" type="password" placeholder="API Key（如需）" style="width:170px">
-      <button id="saveKey">保存 Key</button>
       <label class="row" style="margin:0;color:var(--muted)">
         <input id="auto" type="checkbox" checked style="min-width:auto"> 自动刷新
       </label>
       <button class="primary" id="refresh">刷新额度</button>
+      <button id="logout" hidden>退出登录</button>
     </div>
   </header>
 
@@ -136,7 +135,7 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-let KEY = localStorage.getItem('loomy2api_key') || '';
+try { localStorage.removeItem('loomy2api_key'); } catch (e) {}
 
 function toast(msg, kind) {
   const el = document.createElement('div');
@@ -147,10 +146,13 @@ function toast(msg, kind) {
 }
 
 async function api(path, opts) {
-  const o = Object.assign({headers: {}}, opts || {});
-  if (KEY) { o.headers['Authorization'] = 'Bearer ' + KEY; }
+  const o = Object.assign({headers: {}, credentials: 'same-origin'}, opts || {});
   if (o.body) { o.headers['Content-Type'] = 'application/json'; }
   const res = await fetch(path, o);
+  if (res.status === 401) {
+    location.replace('/panel');
+    throw new Error('需要重新登录');
+  }
   let data = null;
   try { data = await res.json(); } catch (e) { data = null; }
   if (!res.ok) {
@@ -185,7 +187,8 @@ function render(state) {
 
   $('poolHint').textContent = '模型 ' + c.models + ' 个 · 默认 ' + c.default_model
     + ' · 额度缓存 ' + c.quota_refresh_minutes + ' 分钟'
-    + (c.auth_required ? ' · 面板已开启 API Key 校验' : ' · 面板未设 API Key（仅本机使用）');
+    + (c.auth_required ? ' · 已登录' : ' · 面板未设 API Key（仅本机使用）');
+  $('logout').hidden = !c.auth_required;
 
   if (!state.accounts.length) {
     $('rows').innerHTML = '<tr><td colspan="9" class="muted">还没有账号，用下面的表单添加</td></tr>';
@@ -270,13 +273,12 @@ async function loadLog() {
 $('refresh').onclick = () => load(true).then(loadLog);
 $('add').onclick = addAccount;
 $('loadLog').onclick = loadLog;
-$('saveKey').onclick = () => {
-  KEY = $('apiKey').value.trim();
-  localStorage.setItem('loomy2api_key', KEY);
-  toast('已保存 API Key', 'ok');
-  load(true); loadLog();
+$('logout').onclick = async () => {
+  try {
+    await fetch('/api/panel/logout', {method: 'POST', credentials: 'same-origin'});
+  } catch (e) {}
+  location.replace('/panel');
 };
-$('apiKey').value = KEY;
 
 load(); loadLog();
 setInterval(() => { if ($('auto').checked) load(); }, 10000);

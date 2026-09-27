@@ -16,7 +16,7 @@
   "_proxy": "empty = direct connection (recommended for these domestic endpoints)",
   "proxy": "",
 
-  "_api_keys": "empty list = the gateway needs no key. Set e.g. [\"sk-abc\"] to require Bearer/x-api-key.",
+  "_api_keys": "empty list = no auth (fine on localhost). Set e.g. [\"sk-abc\"] to require Bearer/x-api-key on the model API and a login page on /panel. The panel session cookie is not accepted on /v1.",
   "api_keys": [],
 
   "default_model": "deepseek-v4-flash-0731",

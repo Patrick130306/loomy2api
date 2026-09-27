@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>loomy2api · 登录</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212a; --line:#272c38;
+    --fg:#e6e9ef; --muted:#9aa3b8; --accent:#5b9dff; --bad:#f2545b; --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    background:var(--bg);color:var(--fg);
+    font:14px/1.55 "Segoe UI",system-ui,-apple-system,"Microsoft YaHei",sans-serif}
+  form{width:min(420px,calc(100% - 32px));background:var(--panel);
+    border:1px solid var(--line);border-radius:var(--radius);padding:22px 20px}
+  h1{margin:0 0 6px;font-size:20px}
+  p{margin:0 0 16px;color:var(--muted);font-size:13px}
+  label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+  input{width:100%;background:var(--panel2);border:1px solid var(--line);color:var(--fg);
+    border-radius:8px;padding:0 10px;height:36px;font-size:14px}
+  input:focus{outline:none;border-color:var(--accent)}
+  button{margin-top:14px;width:100%;height:36px;border:0;border-radius:8px;
+    background:var(--accent);color:#08111f;font-weight:600;cursor:pointer}
+  button:disabled{opacity:.55;cursor:not-allowed}
+  .err{min-height:1.4em;margin:10px 0 0;color:var(--bad);font-size:13px}
+</style>
+</head>
+<body>
+<form id="login">
+  <h1>loomy2api</h1>
+  <p>控制面板登录。填写网关的 API Key，密钥不会保存在浏览器里。</p>
+  <label for="key">API Key</label>
+  <input id="key" type="password" autocomplete="current-password" autofocus required>
+  <button id="submit" type="submit">登录</button>
+  <p class="err" id="err" role="alert"></p>
+</form>
+<script>
+const form = document.getElementById('login');
+const key = document.getElementById('key');
+const err = document.getElementById('err');
+const submit = document.getElementById('submit');
+try { localStorage.removeItem('loomy2api_key'); } catch (e) {}
+form.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  err.textContent = '';
+  submit.disabled = true;
+  try {
+    const res = await fetch('/api/panel/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({api_key: key.value}),
+    });
+    if (!res.ok) {
+      let message = '登录失败';
+      try {
+        const data = await res.json();
+        message = (data.error && data.error.message) || message;
+      } catch (e) {}
+      err.textContent = message;
+      return;
+    }
+    key.value = '';
+    location.replace('/panel');
+  } catch (e) {
+    err.textContent = '无法连接面板';
+  } finally {
+    submit.disabled = false;
+  }
+});
+</script>
+</body>
+</html>
