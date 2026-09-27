@@ -69,7 +69,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:17890/v1", api_key="not-needed")
 print(client.chat.completions.create(
-    model="gpt-4o-mini",                      # aliases are configurable
+    model="deepseek-v4-flash-0731",            # see GET /v1/models
     messages=[{"role": "user", "content": "hi"}],
 ).choices[0].message.content)
 ```
@@ -173,8 +173,12 @@ generates a fresh identity **and** logs the account in again under it.
 
 ## Model catalogue
 
-Whatever the upstream returns from `/models` is exposed as-is, plus any aliases
-you configure. Typical catalogue (the multiplier is the points cost factor —
+Whatever the upstream returns from `/models` is exposed as-is — model ids are
+used **verbatim**, there is no alias/mapping table (only a `provider/` prefix is
+stripped). Verified behaviour to be aware of: the upstream silently falls back
+to `deepseek-v4-flash-0731` when it does not recognise an id — `gpt-4o-mini`
+answers HTTP 200 as `deepseek-v4-flash-0731` — so always read the `model` field
+of the response. Typical catalogue (the multiplier is the points cost factor —
 `spark-x` at `x0.1` is by far the cheapest):
 
 | id | multiplier | notes |
@@ -364,8 +368,10 @@ Clients then use `https://api.example.com/v1` as the base URL.
 | Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:17890` `ANTHROPIC_API_KEY=<any>` |
 | curl | see the quick start above |
 
-Model names: use the upstream ids, or configure `model_aliases` so familiar
-names (`gpt-4o`, `claude-3-5-sonnet`, …) map onto them.
+Model names: use the ids from `/v1/models` (`deepseek-v4-flash-0731`,
+`spark-x`, `Kimi-k2.6`, …). The gateway does not remap anything; the upstream
+falls back to its default model for an unknown id, so check the `model` field
+in the response if something looks off.
 
 ### 7. Upgrading & backup
 

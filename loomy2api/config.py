@@ -35,13 +35,6 @@ DEFAULTS: Dict[str, Any] = {
     # gateway -------------------------------------------------------------
     "api_keys": [],               # [] = no auth; otherwise Bearer / x-api-key
     "default_model": C.DEFAULT_MODEL,
-    "model_aliases": {
-        "gpt-4o": "deepseek-v4-flash-0731",
-        "gpt-4o-mini": "qwen3.8-flash",
-        "gpt-4-1106-preview": "deepseek-v4-flash-0731",
-        "claude-3-5-sonnet": "Kimi-k2.6",
-        "claude-sonnet-4-5": "MiniMax-M3",
-    },
     "timeout": 1200,
     "request_purpose": "chat.message",
     "log_dir": "logs",

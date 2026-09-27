@@ -20,14 +20,7 @@
   "api_keys": [],
 
   "default_model": "deepseek-v4-flash-0731",
-  "_model_aliases": "map common client model names onto real upstream ids",
-  "model_aliases": {
-    "gpt-4o": "deepseek-v4-flash-0731",
-    "gpt-4o-mini": "qwen3.8-flash",
-    "gpt-4-1106-preview": "deepseek-v4-flash-0731",
-    "claude-3-5-sonnet": "Kimi-k2.6",
-    "claude-sonnet-4-5": "MiniMax-M3"
-  },
+  "_models": "Upstream model ids are used verbatim — no alias table. See GET /v1/models for the catalogue.",
 
   "timeout": 1200,
   "request_purpose": "chat.message",

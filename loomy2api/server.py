@@ -84,15 +84,19 @@ class Gateway:
             return list(self.models)
 
     def resolve_model(self, requested: str) -> str:
+        """Model ids are used **verbatim** — there is no alias table.
+
+        Only the provider prefix is stripped (``imodel/deepseek-…`` →
+        ``deepseek-…``), because several clients insist on writing it. Note that
+        the upstream itself falls back to its default model when it does not
+        recognise an id (measured: ``gpt-4o-mini`` → ``deepseek-v4-flash-0731``,
+        HTTP 200), so a typo degrades instead of erroring — always check the
+        ``model`` field of the response.
+        """
         name = str(requested or "").strip()
         if self.cfg.get("strip_model_prefix", True) and "/" in name:
             name = name.split("/", 1)[1].strip()
-        aliases = self.cfg.get("model_aliases") or {}
-        if name in aliases:
-            return str(aliases[name])
-        if not name:
-            return str(self.cfg.get("default_model") or C.DEFAULT_MODEL)
-        return name
+        return name or str(self.cfg.get("default_model") or C.DEFAULT_MODEL)
 
     # -- background ------------------------------------------------------
 
@@ -340,11 +344,7 @@ class Handler(BaseHTTPRequestHandler):
         if not catalogue:
             gw.refresh_models()
             catalogue = gw.catalogue()
-        aliases = gw.cfg.get("model_aliases") or {}
-        extra = [{"id": alias, "object": "model", "owned_by": "alias",
-                  "target": target} for alias, target in aliases.items()
-                 if alias != target]
-        return self._json(200, {"object": "list", "data": list(catalogue) + extra})
+        return self._json(200, {"object": "list", "data": list(catalogue)})
 
     def _points(self) -> None:
         gw = self.gateway

@@ -98,11 +98,11 @@ class GatewayTestCase(_Harness, unittest.TestCase):
         self.assertEqual(payload["usable_accounts"], 2)
         self.assertFalse(payload["auth_required"])
 
-    def test_models_includes_aliases(self):
+    def test_models_lists_the_upstream_catalogue(self):
         _status, payload = self.get("/v1/models")
         ids = [m["id"] for m in payload["data"]]
         self.assertIn("fake-model", ids)
-        self.assertIn("gpt-4o", ids)
+        self.assertTrue(all(m.get("owned_by") != "alias" for m in payload["data"]))
 
     def test_chat_non_stream(self):
         status, body, _ = self.post("/v1/chat/completions", {
@@ -115,10 +115,17 @@ class GatewayTestCase(_Harness, unittest.TestCase):
         self.assertEqual(payload["choices"][0]["message"]["content"], "echo:ping")
         self.assertEqual(payload["usage"]["points_consumed"], 1)
 
-    def test_alias_resolution(self):
+    def test_model_name_is_passed_through_verbatim(self):
+        """No alias table: an unknown name goes upstream as-is (so a typo is a
+        400 from the upstream, not a silent redirect to another model)."""
         _s, body, _ = self.post("/v1/chat/completions", {
             "model": "gpt-4o-mini", "messages": [{"role": "user", "content": "x"}]})
-        self.assertEqual(json.loads(body)["model"], "qwen3.8-flash")
+        self.assertEqual(json.loads(body)["model"], "gpt-4o-mini")
+
+    def test_missing_model_falls_back_to_default(self):
+        _s, body, _ = self.post("/v1/chat/completions", {
+            "messages": [{"role": "user", "content": "x"}]})
+        self.assertEqual(json.loads(body)["model"], self.cfg["default_model"])
 
     def test_chat_stream(self):
         _s, body, _ = self.post("/v1/chat/completions", {

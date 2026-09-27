@@ -66,7 +66,7 @@ from openai import OpenAI
 
 client = OpenAI(base_url="http://127.0.0.1:17890/v1", api_key="随便填")
 print(client.chat.completions.create(
-    model="gpt-4o-mini",                      # 别名可配置
+    model="deepseek-v4-flash-0731",            # 见 GET /v1/models
     messages=[{"role": "user", "content": "你好"}],
 ).choices[0].message.content)
 ```
@@ -161,8 +161,11 @@ Key 存在浏览器 localStorage 里。
 
 ## 模型清单
 
-上游 `/models` 返回什么就暴露什么，另外加上你配置的别名。典型清单
-（倍率就是扣分系数，`spark-x` 的 x0.1 最省）：
+上游 `/models` 返回什么就暴露什么——模型名**原样使用**，没有别名表（只剥掉 `provider/` 前缀）。
+一个实测出来的行为要注意：**上游自己对不认识的模型名会静默回落到 `deepseek-v4-flash-0731`**
+（传 `gpt-4o-mini` 会返回 HTTP 200，但回包 `model` 是 `deepseek-v4-flash-0731`），
+所以写错名字不会报错，要看回包里的 `model` 字段确认实际用了哪个。
+典型清单（倍率就是扣分系数，`spark-x` 的 x0.1 最省）：
 
 | id | 倍率 | 说明 |
 |---|---|---|
@@ -347,8 +350,9 @@ docker compose logs -f
 | Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:17890`、`ANTHROPIC_API_KEY=<随便>` |
 | curl | 见上面「快速开始」 |
 
-模型名可以直接用上游 id，也可以在 `model_aliases` 里把你习惯的名字
-（`gpt-4o`、`claude-3-5-sonnet` 等）映射过去。
+模型名直接用上游 id（见 `/v1/models`，比如 `deepseek-v4-flash-0731`、`spark-x`、`Kimi-k2.6`）。
+网关**不做任何映射**，名字原样转发（只剥掉 `provider/` 前缀）；注意上游自己对不认识的模型名会
+静默回落到默认模型，所以怀疑没生效时看回包的 `model` 字段。
 
 ### 7. 升级与备份
 
