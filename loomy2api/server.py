@@ -105,7 +105,10 @@ class Gateway:
     def start(self) -> None:
         self.pool.bootstrap()
         self.pool.start()
-        self.refresh_models()
+        # Catalogue fetch uses the upstream timeout and can sit in a TLS
+        # handshake for a long time. Do not block the listening socket on it.
+        threading.Thread(target=self.refresh_models, name="model-catalogue",
+                         daemon=True).start()
 
 
 # ------------------------------------------------------------------ handler
