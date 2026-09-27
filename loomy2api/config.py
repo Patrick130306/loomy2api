@@ -30,7 +30,7 @@ DEFAULTS: Dict[str, Any] = {
     "access_key_id": "",          # empty → use the client-shipped constant
     "access_key_secret": "",
     "loomy_version": C.DEFAULT_LOOMY_VERSION,
-    "proxy": "",                  # "" = direct; e.g. http://127.0.0.1:7877
+    "proxy": "",                  # "" = direct; http:// https:// or socks5://host:port
 
     # gateway -------------------------------------------------------------
     "api_keys": [],               # [] = no auth; otherwise Bearer / x-api-key
@@ -132,4 +132,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         if value:
             cfg[cfg_key] = _coerce(cfg, cfg_key, value)
 
+    # Remember where to write panel edits back. Missing file is fine.
+    cfg.config_path = config_path
+    cfg.proxy_from_env = bool(os.environ.get("LOOMY_PROXY"))
     return cfg

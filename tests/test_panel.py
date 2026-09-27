@@ -222,6 +222,42 @@ class TestPanelWrites(PanelHarness, unittest.TestCase):
             self.post("/api/panel/nonsense", {})
         self.assertEqual(ctx.exception.code, 404)
 
+    def test_panel_saves_socks5_proxy_without_leaking_the_password(self):
+        cfg_path = self.dir / "config.json"
+        cfg_path.write_text('{"strategy": "lru", "_comment": "keep"}\n', encoding="utf-8")
+        status, payload = self.post("/api/panel/proxy", {
+            "proxy": "socks5://alice:s3cret@10.1.1.1:1080",
+        })
+        self.assertEqual(status, 200)
+        view = payload["proxy"]
+        self.assertEqual(view["scheme"], "socks5")
+        self.assertEqual(view["masked"], "socks5://alice:***@10.1.1.1:1080")
+        self.assertNotIn("s3cret", json.dumps(payload))
+        self.assertEqual(self.gateway.cfg["proxy"],
+                         "socks5://alice:s3cret@10.1.1.1:1080")
+        saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["_comment"], "keep")
+        self.assertEqual(saved["strategy"], "lru")
+        self.assertIn("s3cret", saved["proxy"])
+
+        status, payload = self.post("/api/panel/proxy", {
+            "scheme": "https", "host": "10.2.2.2", "port": 443, "username": "alice",
+        })
+        self.assertEqual(payload["proxy"]["scheme"], "https")
+        self.assertTrue(payload["proxy"]["has_password"])
+        self.assertNotIn("s3cret", json.dumps(payload))
+        self.assertIn("s3cret", self.gateway.cfg["proxy"])
+
+        self.post("/api/panel/proxy", {"scheme": "direct"})
+        self.assertEqual(self.gateway.cfg["proxy"], "")
+        _s, state = self.get_json("/api/panel/state")
+        self.assertFalse(state["config"]["proxy"]["enabled"])
+
+    def test_proxy_scheme_is_rejected(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.post("/api/panel/proxy", {"proxy": "file:///tmp/x"})
+        self.assertEqual(ctx.exception.code, 400)
+
     def test_logs_endpoint(self):
         self.gateway.log("panel test line")
         _s, payload = self.get_json("/api/panel/logs?lines=20")
@@ -244,6 +280,11 @@ class TestPanelAuth(PanelHarness, unittest.TestCase):
                                     headers={"Authorization": "Bearer panel-key"})
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["config"]["auth_required"])
+
+    def test_proxy_requires_key(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.post("/api/panel/proxy", {"scheme": "direct"})
+        self.assertEqual(ctx.exception.code, 401)
 
     def test_writes_require_key(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:

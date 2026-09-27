@@ -210,7 +210,7 @@ Environment variables override it:
 | `LOOMY_API_KEYS` | comma-separated gateway keys (`[]` = no auth) |
 | `LOOMY_DEFAULT_MODEL` | fallback model |
 | `LOOMY_ACCOUNTS_FILE` / `LOOMY_LOG_DIR` | state locations |
-| `LOOMY_PROXY` | e.g. `http://127.0.0.1:7877` (default: direct) |
+| `LOOMY_PROXY` | `socks5://`, `http://`, or `https://host:port` (default: direct). SOCKS5 resolves DNS at the proxy. The panel can change it at runtime. |
 | `LOOMY_STRATEGY` | `balance` / `round_robin` / `lru` |
 
 ### Protecting the gateway

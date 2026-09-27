@@ -114,6 +114,28 @@
   </section>
 
   <section>
+    <h2>出口代理 <small>upstream proxy</small></h2>
+    <div class="grid">
+      <div><label>类型</label>
+        <select id="p-scheme">
+          <option value="direct">直连 direct</option>
+          <option value="socks5">SOCKS5</option>
+          <option value="http">HTTP</option>
+          <option value="https">HTTPS</option>
+        </select>
+      </div>
+      <div><label>主机 host</label><input id="p-host" placeholder="127.0.0.1 或代理域名" autocomplete="off"></div>
+      <div><label>端口 port</label><input id="p-port" inputmode="numeric" placeholder="1080"></div>
+      <div><label>用户名 username</label><input id="p-user" autocomplete="off" placeholder="可选"></div>
+      <div><label>密码 password</label><input id="p-pass" type="password" autocomplete="new-password" placeholder="留空则不修改"></div>
+      <div><button class="primary" id="saveProxy">保存代理</button></div>
+    </div>
+    <div class="hint" id="proxyMasked">当前直连</div>
+    <div class="hint" id="proxyEnv" hidden>LOOMY_PROXY 环境变量在重启后会盖过这里的保存结果。</div>
+    <div class="hint">只改变本网关访问讯飞上游的出口，国内用户打开这个面板不受影响。SOCKS5 由代理解析域名。也可用环境变量 LOOMY_PROXY（socks5://、http://、https://）。</div>
+  </section>
+
+  <section>
     <h2>运行日志 <small>recent log</small></h2>
     <div class="row" style="margin-bottom:8px">
       <button id="loadLog">刷新日志</button>
@@ -189,6 +211,8 @@ function render(state) {
     + ' · 额度缓存 ' + c.quota_refresh_minutes + ' 分钟'
     + (c.auth_required ? ' · 已登录' : ' · 面板未设 API Key（仅本机使用）');
   $('logout').hidden = !c.auth_required;
+  fillProxy(c.proxy || {});
+  if ($('proxyEnv')) $('proxyEnv').hidden = !c.proxy_from_env;
 
   if (!state.accounts.length) {
     $('rows').innerHTML = '<tr><td colspan="9" class="muted">还没有账号，用下面的表单添加</td></tr>';
@@ -273,6 +297,45 @@ async function loadLog() {
 $('refresh').onclick = () => load(true).then(loadLog);
 $('add').onclick = addAccount;
 $('loadLog').onclick = loadLog;
+let proxyDirty = false;
+function fillProxy(p) {
+  if (proxyDirty || !$('p-scheme')) return;
+  $('p-scheme').value = p.enabled ? (p.scheme || 'socks5') : 'direct';
+  $('p-host').value = p.host || '';
+  $('p-port').value = p.port || '';
+  $('p-user').value = p.username || '';
+  $('proxyMasked').textContent = p.enabled ? ('当前 ' + p.masked) : '当前直连';
+  syncProxyFields();
+}
+function syncProxyFields() {
+  const direct = $('p-scheme').value === 'direct';
+  ['p-host', 'p-port', 'p-user', 'p-pass'].forEach((id) => { $(id).disabled = direct; });
+}
+async function saveProxy() {
+  const scheme = $('p-scheme').value;
+  const body = {
+    scheme: scheme,
+    host: $('p-host').value.trim(),
+    port: $('p-port').value.trim(),
+    username: $('p-user').value,
+  };
+  if ($('p-pass').value) body.password = $('p-pass').value;
+  try {
+    const res = await api('/api/panel/proxy', {method: 'POST', body: JSON.stringify(body)});
+    proxyDirty = false;
+    $('p-pass').value = '';
+    toast(scheme === 'direct' ? '已改为直连' : '出口代理已保存', 'ok');
+    if (res.state) render(res.state);
+  } catch (e) {
+    toast('保存代理失败：' + e.message, 'err');
+  }
+}
+['p-scheme', 'p-host', 'p-port', 'p-user', 'p-pass'].forEach((id) => {
+  $(id).addEventListener('input', () => { proxyDirty = true; });
+  $(id).addEventListener('change', () => { proxyDirty = true; syncProxyFields(); });
+});
+$('saveProxy').onclick = saveProxy;
+
 $('logout').onclick = async () => {
   try {
     await fetch('/api/panel/logout', {method: 'POST', credentials: 'same-origin'});

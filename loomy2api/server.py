@@ -411,6 +411,7 @@ class Handler(BaseHTTPRequestHandler):
             "/api/panel/accounts/renew": panel.renew_account,
             "/api/panel/accounts/identity": panel.identity,
             "/api/panel/refresh": lambda _p: panel.refresh(_p),
+            "/api/panel/proxy": panel.set_proxy,
         }
         handler = handlers.get(path)
         if handler is None:

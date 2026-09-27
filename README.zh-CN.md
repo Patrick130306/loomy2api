@@ -196,7 +196,7 @@ export ANTHROPIC_API_KEY=随便填
 | `LOOMY_API_KEYS` | 网关自己的 Key，逗号分隔（`[]` = 不鉴权） |
 | `LOOMY_DEFAULT_MODEL` | 兜底模型 |
 | `LOOMY_ACCOUNTS_FILE` / `LOOMY_LOG_DIR` | 状态文件位置 |
-| `LOOMY_PROXY` | 如 `http://127.0.0.1:7877`（默认直连） |
+| `LOOMY_PROXY` | `socks5://`、`http://` 或 `https://主机:端口`（默认直连）。SOCKS5 由代理解析域名。面板里也能改，立即生效。 |
 | `LOOMY_STRATEGY` | `balance` / `round_robin` / `lru` |
 
 ### 给网关加把锁
