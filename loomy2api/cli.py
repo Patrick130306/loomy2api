@@ -304,7 +304,22 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _configure_stdio() -> None:
+    """Force UTF-8 on stdout/stderr.
+
+    Windows consoles and pipes default to a legacy codepage (cp1252 on CI
+    runners, cp936 on a Chinese desktop), and every message this CLI prints is
+    UTF-8 — without this, ``--help`` alone blows up with UnicodeEncodeError.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # 3.7+
+        except Exception:                               # noqa: BLE001
+            pass
+
+
 def main(argv: Optional[List[str]] = None) -> int:
+    _configure_stdio()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "cmd", None):

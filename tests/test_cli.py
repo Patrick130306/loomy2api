@@ -82,6 +82,25 @@ class CliTestCase(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn("serve", buf.getvalue())
 
+    def test_cli_survives_legacy_console_encoding(self):
+        """Windows CI runs with a legacy codepage (cp1252), and every message
+        we print is UTF-8 — the CLI must force UTF-8 instead of dying."""
+        import os
+        import subprocess
+        import sys
+
+        env = dict(os.environ, PYTHONIOENCODING="cp1252",
+                   LOOMY_ACCOUNTS_FILE=str(self.dir / "accounts.json"),
+                   LOOMY_LOG_DIR=str(self.dir / "logs"))
+        for args in (["--help"], ["-c", str(self.cfg_file), "accounts"]):
+            proc = subprocess.run([sys.executable, "-m", "loomy2api", *args],
+                                  capture_output=True, env=env,
+                                  cwd=str(Path(__file__).resolve().parent.parent))
+            self.assertEqual(
+                proc.returncode, 0,
+                f"{args} failed: {proc.stderr.decode('utf-8', 'replace')[:400]}")
+            self.assertNotIn(b"UnicodeEncodeError", proc.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

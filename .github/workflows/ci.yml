@@ -35,6 +35,7 @@ jobs:
         run: |
           python -m loomy2api --help
           python -m loomy2api accounts
+          python -m loomy2api models --help
         env:
-          LOOMY_ACCOUNTS_FILE: accounts.empty.json
-          LOOMY_LOG_DIR: /tmp/loomy-logs
+          LOOMY_ACCOUNTS_FILE: ci-accounts.json
+          LOOMY_LOG_DIR: ci-logs
