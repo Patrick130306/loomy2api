@@ -249,6 +249,15 @@ class AccountPool:
         return acc
 
     def refresh_quota(self, acc: Account) -> Account:
+        """Refresh one account's points; never raises.
+
+        This runs from the panel, the CLI and the background keeper — any of
+        which can be offline, behind a dead proxy, or talking to an upstream
+        that is simply down. A failed refresh must degrade to "quota unknown",
+        not crash the caller (a socket/DNS error is *not* an UpstreamError).
+        """
+        if not acc.session:
+            return acc
         try:
             quota = self.gateway.quota(acc.session)
         except UpstreamError as exc:
@@ -256,7 +265,12 @@ class AccountPool:
                 acc.session, acc.expire_at = "", 0
                 self.log(f"账号 {acc.name} session 被上游拒绝（HTTP {exc.status}）")
             else:
+                acc.last_error = f"quota: {exc}"
                 self.log(f"账号 {acc.name} 额度查询失败：{exc}")
+            return acc
+        except Exception as exc:                        # noqa: BLE001
+            acc.last_error = f"quota: {exc}"
+            self.log(f"账号 {acc.name} 额度查询异常（网络？）：{exc}")
             return acc
         acc.balance = quota.get("balance")
         acc.daily_balance = quota.get("daily_balance")

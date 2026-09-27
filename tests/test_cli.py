@@ -23,6 +23,9 @@ class CliTestCase(unittest.TestCase):
             "log_dir": str(self.dir / "logs"),
             "sessions_from_client": False,
             "log_console": False,
+            # point at a dead port: any accidental upstream call fails fast, the
+            # same way it does on a CI runner with no route to the real host
+            "upstream": "http://127.0.0.1:1/api/v1",
         }), encoding="utf-8")
         (self.dir / "accounts.json").write_text(json.dumps({"accounts": [
             {"name": "a", "session": "s1",
@@ -74,6 +77,14 @@ class CliTestCase(unittest.TestCase):
         code, out = self.run_cli(["quota"])
         self.assertEqual(code, 0)
         self.assertIn("合计可用积分", out)
+
+    def test_commands_tolerate_unreachable_upstream(self):
+        """CI runners cannot reach the upstream: quota refresh must degrade to
+        "unknown" instead of raising (this is what broke the Windows matrix)."""
+        for argv in (["accounts"], ["quota"]):
+            code, out = self.run_cli(argv)
+            self.assertEqual(code, 0, f"{argv} should not fail offline")
+            self.assertIn("a", out)                 # still lists the account
 
     def test_help_without_command(self):
         buf = io.StringIO()

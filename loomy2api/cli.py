@@ -49,7 +49,7 @@ def cmd_accounts(cfg, args) -> int:
     pool = _pool(cfg)
     for acc in pool.accounts:
         if acc.session_valid:
-            pool.refresh_quota(acc)
+            pool.refresh_quota(acc)          # offline-tolerant by design
     snap = pool.snapshot()
     print(f"策略 {snap['strategy']} · 账号 {snap['count']} 个 · 可用 {snap['usable']} 个")
     print("-" * 78)
