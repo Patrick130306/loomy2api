@@ -130,8 +130,11 @@ Open <http://127.0.0.1:17890/panel> (the bare host also serves it):
 * **rebind device identity** — see below
 * live tail of the gateway log, auto-refresh
 
-If `api_keys` is set, the panel's JSON API requires it (the page itself stays
-public so you can enter the key); the key is kept in `localStorage`.
+If `api_keys` is set, `/` and `/panel` are a login form until you sign in with
+that key. The browser keeps an HttpOnly session cookie — not the key, and not
+in `localStorage`. That cookie unlocks `/api/panel/*` only. Model clients still
+send `Authorization: Bearer` or `x-api-key`; a panel session is rejected on
+`/v1/*`. With no `api_keys`, the panel stays open for localhost use.
 
 ## Account identity (device fingerprint)
 
@@ -207,7 +210,7 @@ Environment variables override it:
 | `LOOMY_API_KEYS` | comma-separated gateway keys (`[]` = no auth) |
 | `LOOMY_DEFAULT_MODEL` | fallback model |
 | `LOOMY_ACCOUNTS_FILE` / `LOOMY_LOG_DIR` | state locations |
-| `LOOMY_PROXY` | e.g. `http://127.0.0.1:7877` (default: direct) |
+| `LOOMY_PROXY` | `socks5://`, `http://`, or `https://host:port` (default: direct). SOCKS5 resolves DNS at the proxy. The panel can change it at runtime. |
 | `LOOMY_STRATEGY` | `balance` / `round_robin` / `lru` |
 
 ### Protecting the gateway
@@ -217,7 +220,8 @@ Environment variables override it:
 ```
 
 Clients then send `Authorization: Bearer sk-local-whatever` or
-`x-api-key: sk-local-whatever`. `/health` stays public for probes.
+`x-api-key: sk-local-whatever`. The same key is what you type into the panel
+login page. `/health` stays public for probes.
 
 ## Docker
 
@@ -339,11 +343,14 @@ By default the gateway binds `127.0.0.1` — only your machine can reach it.
 To share it on your LAN or the internet:
 
 1. **Set an API key first.** Without `api_keys`, anyone who can reach the port
-   spends your account's points:
+   spends your account's points, and the panel has no login page:
 
    ```json
    { "api_keys": ["sk-something-long-and-random"] }
    ```
+
+   Opening the site then shows a login form. The key is checked and discarded;
+   it is not stored in the browser.
 2. Then `LOOMY_HOST=0.0.0.0` (or `"host": "0.0.0.0"` in `config.json`).
 3. Put a reverse proxy with TLS in front if it's public. Caddy example:
 

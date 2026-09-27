@@ -222,6 +222,42 @@ class TestPanelWrites(PanelHarness, unittest.TestCase):
             self.post("/api/panel/nonsense", {})
         self.assertEqual(ctx.exception.code, 404)
 
+    def test_panel_saves_socks5_proxy_without_leaking_the_password(self):
+        cfg_path = self.dir / "config.json"
+        cfg_path.write_text('{"strategy": "lru", "_comment": "keep"}\n', encoding="utf-8")
+        status, payload = self.post("/api/panel/proxy", {
+            "proxy": "socks5://alice:s3cret@10.1.1.1:1080",
+        })
+        self.assertEqual(status, 200)
+        view = payload["proxy"]
+        self.assertEqual(view["scheme"], "socks5")
+        self.assertEqual(view["masked"], "socks5://alice:***@10.1.1.1:1080")
+        self.assertNotIn("s3cret", json.dumps(payload))
+        self.assertEqual(self.gateway.cfg["proxy"],
+                         "socks5://alice:s3cret@10.1.1.1:1080")
+        saved = json.loads(cfg_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved["_comment"], "keep")
+        self.assertEqual(saved["strategy"], "lru")
+        self.assertIn("s3cret", saved["proxy"])
+
+        status, payload = self.post("/api/panel/proxy", {
+            "scheme": "https", "host": "10.2.2.2", "port": 443, "username": "alice",
+        })
+        self.assertEqual(payload["proxy"]["scheme"], "https")
+        self.assertTrue(payload["proxy"]["has_password"])
+        self.assertNotIn("s3cret", json.dumps(payload))
+        self.assertIn("s3cret", self.gateway.cfg["proxy"])
+
+        self.post("/api/panel/proxy", {"scheme": "direct"})
+        self.assertEqual(self.gateway.cfg["proxy"], "")
+        _s, state = self.get_json("/api/panel/state")
+        self.assertFalse(state["config"]["proxy"]["enabled"])
+
+    def test_proxy_scheme_is_rejected(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.post("/api/panel/proxy", {"proxy": "file:///tmp/x"})
+        self.assertEqual(ctx.exception.code, 400)
+
     def test_logs_endpoint(self):
         self.gateway.log("panel test line")
         _s, payload = self.get_json("/api/panel/logs?lines=20")
@@ -245,15 +281,130 @@ class TestPanelAuth(PanelHarness, unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["config"]["auth_required"])
 
+    def test_proxy_requires_key(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.post("/api/panel/proxy", {"scheme": "direct"})
+        self.assertEqual(ctx.exception.code, 401)
+
     def test_writes_require_key(self):
         with self.assertRaises(urllib.error.HTTPError) as ctx:
             self.post("/api/panel/accounts/remove", {"name": "a"})
         self.assertEqual(ctx.exception.code, 401)
         self.assertIsNotNone(self.gateway.pool.get("a"))
 
-    def test_page_itself_stays_public(self):
-        status, _response = self.get("/panel")
+    def _login(self, key="panel-key", headers=None):
+        request = urllib.request.Request(
+            self.base + "/api/panel/login",
+            data=json.dumps({"api_key": key}).encode(),
+            headers={"Content-Type": "application/json", **(headers or {})},
+            method="POST")
+        response = urllib.request.urlopen(request, timeout=30)
+        set_cookie = response.headers.get("Set-Cookie") or ""
+        response.read()
+        return set_cookie
+
+    def test_anonymous_page_is_login_only(self):
+        status, response = self.get("/panel")
+        body = response.read().decode("utf-8")
         self.assertEqual(status, 200)
+        self.assertIn("登录", body)
+        self.assertNotIn("添加账号", body)
+        self.assertNotIn("/api/panel/state", body)
+        self.assertNotIn("localStorage.setItem", body)
+
+        status, response = self.get("/")
+        body = response.read().decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn("登录", body)
+        self.assertNotIn("添加账号", body)
+
+    def test_session_endpoint_is_anonymous_and_empty(self):
+        _s, payload = self.get_json("/api/panel/session")
+        self.assertEqual(payload, {
+            "ok": True, "auth_required": True, "authenticated": False,
+        })
+
+    def test_login_sets_httponly_cookie_and_unlocks_panel(self):
+        set_cookie = self._login()
+        parts = [part.strip() for part in set_cookie.split(";")]
+        self.assertTrue(parts[0].startswith("loomy_panel="))
+        self.assertIn("HttpOnly", parts)
+        self.assertIn("SameSite=Lax", parts)
+        self.assertNotIn("Secure", parts)
+        self.assertNotIn("panel-key", parts[0])
+        cookie = set_cookie.split(";", 1)[0]
+
+        status, response = self.get("/panel", headers={"Cookie": cookie})
+        body = response.read().decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertIn("添加账号", body)
+        self.assertNotIn("localStorage.setItem", body)
+
+        _s, payload = self.get_json("/api/panel/state", headers={"Cookie": cookie})
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["accounts"][0]["name"], "a")
+
+        status, payload = self.post(
+            "/api/panel/accounts/remove", {"name": "a"},
+            headers={"Cookie": cookie})
+        self.assertEqual(status, 200)
+        self.assertTrue(payload["ok"])
+
+    def test_login_cookie_is_secure_behind_https_proxy(self):
+        set_cookie = self._login(headers={"X-Forwarded-Proto": "https"})
+        parts = [part.strip() for part in set_cookie.split(";")]
+        self.assertIn("Secure", parts)
+
+    def test_panel_cookie_does_not_authorize_model_api(self):
+        cookie = self._login().split(";", 1)[0]
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get_json("/v1/models", headers={"Cookie": cookie})
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_wrong_key_rejected(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self._login(key="nope")
+        self.assertEqual(ctx.exception.code, 401)
+
+    def test_login_locks_out_after_repeated_failures(self):
+        codes = []
+        for _ in range(8):
+            try:
+                self._login(key="nope")
+                codes.append(200)
+            except urllib.error.HTTPError as exc:
+                codes.append(exc.code)
+                exc.read()
+        self.assertEqual(codes, [401] * 7 + [429])
+
+    def test_logout_revokes_the_session(self):
+        cookie = self._login().split(";", 1)[0]
+        request = urllib.request.Request(
+            self.base + "/api/panel/logout", data=b"{}", method="POST",
+            headers={"Cookie": cookie, "Content-Type": "application/json"})
+        response = urllib.request.urlopen(request, timeout=30)
+        cleared = response.headers.get("Set-Cookie") or ""
+        response.read()
+        self.assertIn("Max-Age=0", cleared)
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.get_json("/api/panel/state", headers={"Cookie": cookie})
+        self.assertEqual(ctx.exception.code, 401)
+        status, response = self.get("/panel", headers={"Cookie": cookie})
+        body = response.read().decode("utf-8")
+        self.assertEqual(status, 200)
+        self.assertNotIn("添加账号", body)
+
+
+class TestPanelLoginDisabled(PanelHarness, unittest.TestCase):
+    def test_login_is_rejected_when_no_api_key_is_configured(self):
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.post("/api/panel/login", {"api_key": "anything"})
+        self.assertEqual(ctx.exception.code, 400)
+
+    def test_open_panel_session_reports_auth_off(self):
+        _s, payload = self.get_json("/api/panel/session")
+        self.assertEqual(payload["auth_required"], False)
+        self.assertEqual(payload["authenticated"], True)
 
 
 if __name__ == "__main__":

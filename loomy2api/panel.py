@@ -1,15 +1,20 @@
 """Web control panel: HTML page + JSON API.
 
 The page is a single self-contained HTML file (no CDN, no build step) served at
-``/panel``; the JSON API lives under ``/api/panel/*`` and reuses the gateway's
-API-key gate when ``api_keys`` is configured.
+``/panel``. When ``api_keys`` is set, anonymous visitors get ``login.html``
+instead, and the JSON API accepts either the gateway key or the panel session
+cookie.
 
 Endpoints
 ---------
-``GET  /panel``                       the page
+``GET  /panel``                       the page, or the login form
+``POST /api/panel/login``             trade an API key for a session cookie
+``POST /api/panel/logout``            drop that cookie
+``GET  /api/panel/session``           ``{auth_required, authenticated}`` only
 ``GET  /api/panel/state``             accounts + quota + totals (``?refresh=1``
                                       forces a quota refresh)
 ``POST /api/panel/refresh``           refresh every account's quota
+``POST /api/panel/proxy``             set the upstream proxy (socks5/http/https)
 ``POST /api/panel/accounts``          add an account (optionally log in now)
 ``POST /api/panel/accounts/update``   patch loginid / password / enabled
 ``POST /api/panel/accounts/remove``   delete an account
@@ -20,17 +25,21 @@ Endpoints
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .account import Account, AccountError
+from .httpc import compose_proxy, normalize_proxy, proxy_view
 from .pool import PoolError
 
 __all__ = ["Panel"]
 
 WEB_DIR = Path(__file__).resolve().parent / "web"
 PANEL_HTML = WEB_DIR / "index.html"
+LOGIN_HTML = WEB_DIR / "login.html"
 
 #: Hidden phone number for the panel: 138****0000
 def mask_phone(value: str) -> str:
@@ -58,6 +67,12 @@ class Panel:
             return PANEL_HTML.read_bytes()
         except OSError:                                  # pragma: no cover
             return b"<h1>loomy2api</h1><p>panel asset missing</p>"
+
+    def login_html(self) -> bytes:
+        try:
+            return LOGIN_HTML.read_bytes()
+        except OSError:                                  # pragma: no cover
+            return b"<h1>loomy2api</h1><p>login asset missing</p>"
 
     def _account_view(self, acc: Account) -> Dict[str, Any]:
         view = acc.public_dict()
@@ -115,6 +130,8 @@ class Panel:
                 "models": len(self.gw.catalogue()),
                 "auth_required": bool(self.gw.cfg.api_keys),
                 "quota_refresh_minutes": self.gw.cfg.get("quota_refresh_minutes"),
+                "proxy": proxy_view(str(self.gw.cfg.get("proxy") or "")),
+                "proxy_from_env": bool(getattr(self.gw.cfg, "proxy_from_env", False)),
             },
             "accounts": accounts,
         }
@@ -124,6 +141,55 @@ class Panel:
     def refresh(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         self._refresh_all(only_stale=False)
         return self.state()
+
+    def set_proxy(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Point upstream traffic at a SOCKS5, HTTP, or HTTPS proxy.
+
+        Takes either ``{"proxy": "socks5://host:1080"}`` or the panel fields
+        ``scheme`` / ``host`` / ``port`` / ``username`` / ``password``.
+        ``scheme: "direct"`` clears it. A missing password keeps the previous
+        one. The value is applied immediately and written back to config.json.
+        """
+        current = str(self.gw.cfg.get("proxy") or "")
+        if payload.get("scheme") or "host" in payload:
+            url = compose_proxy(
+                scheme=str(payload.get("scheme") or "direct"),
+                host=str(payload.get("host") or ""),
+                port=payload.get("port"),
+                username=str(payload.get("username") or ""),
+                password=payload.get("password") if "password" in payload else None,
+                previous=current,
+            )
+        elif "proxy" in payload:
+            url = normalize_proxy(str(payload.get("proxy") or ""))
+        else:
+            raise ValueError("缺少代理配置 / proxy settings are required")
+        self.gw.cfg["proxy"] = url
+        self._persist_proxy(url)
+        shown = proxy_view(url)["masked"] or "直连"
+        self.log(f"出口代理已更新：{shown}")
+        return {"ok": True, "proxy": proxy_view(url), "state": self.state()}
+
+    def _persist_proxy(self, url: str) -> None:
+        path = getattr(self.gw.cfg, "config_path", None)
+        if not path:
+            return
+        path = Path(path)
+        data: Dict[str, Any] = {}
+        if path.exists():
+            try:
+                loaded = json.loads(path.read_text(encoding="utf-8"))
+            except Exception as exc:                     # noqa: BLE001
+                raise ValueError(f"config.json 无法读取 / cannot read config.json: {exc}") from exc
+            if not isinstance(loaded, dict):
+                raise ValueError("config.json 不是对象 / config.json is not an object")
+            data = loaded
+        data["proxy"] = url
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
 
     def add_account(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         name = str(payload.get("name") or "").strip()
