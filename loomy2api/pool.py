@@ -173,17 +173,49 @@ class AccountPool:
         return None
 
     def add_account(self, name: str, loginid: str = "", password: str = "",
-                    session: str = "", userid: str = "") -> Account:
+                    session: str = "", userid: str = "",
+                    identity: Optional[Dict] = None) -> Account:
         if self.get(name):
             raise PoolError(f"账号 {name} 已存在 / account already exists")
         acc = Account(name=name, loginid=loginid, password=password,
                       session=session, userid=userid)
+        # bind a device identity at creation time, so the account always looks
+        # like one consistent device from its very first request
+        acc.identity = dict(identity) if identity else self.client.ensure_identity(acc)
         if session and not acc.expire_at:
             acc.obtained_at = int(time.time())
             acc.expire_at = acc.obtained_at + C.SESSION_EXPIRE_SECONDS
         with self._lock:
             self._accounts.append(acc)
-        self.save()
+        self.save(force=True)
+        return acc
+
+    def update_account(self, name: str, **fields) -> Account:
+        """Patch an existing account (loginid / password / enabled)."""
+        acc = self.get(name)
+        if acc is None:
+            raise PoolError(f"没有名为 {name} 的账号 / no such account: {name}")
+        for key in ("loginid", "password"):
+            if key in fields and fields[key] is not None:
+                setattr(acc, key, str(fields[key]))
+                if key == "password":
+                    # a new credential means the old session belongs to the old
+                    # login: force a fresh login on next use
+                    acc.session, acc.expire_at = "", 0
+        if "enabled" in fields and fields["enabled"] is not None:
+            acc.enabled = bool(fields["enabled"])
+        self.save(force=True)
+        return acc
+
+    def rebind_identity(self, name: str) -> Account:
+        """Give the account a brand-new device identity (and log it in again)."""
+        acc = self.get(name)
+        if acc is None:
+            raise PoolError(f"没有名为 {name} 的账号 / no such account: {name}")
+        self.client.rebind_identity(acc)
+        if acc.loginid and acc.password:
+            self.ensure_session(acc, force=True)
+        self.save(force=True)
         return acc
 
     def remove_account(self, name: str) -> bool:
@@ -192,7 +224,7 @@ class AccountPool:
             self._accounts = [a for a in self._accounts if a.name != name]
             removed = len(self._accounts) != before
         if removed:
-            self.save()
+            self.save(force=True)
         return removed
 
     # ------------------------------------------------------ session keep

@@ -24,4 +24,4 @@ loomy2api = "loomy2api.cli:main"
 packages = ["loomy2api"]
 
 [tool.setuptools.package-data]
-loomy2api = ["py.typed"]
+loomy2api = ["py.typed", "web/*.html"]

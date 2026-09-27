@@ -20,7 +20,9 @@
 |---|---|
 | OpenAI 协议 | `POST /v1/chat/completions`（流式/非流式）、`GET /v1/models`、`POST /v1/embeddings`、`POST /v1/images/generations` |
 | Anthropic 协议 | `POST /v1/messages`（流式/非流式），支持 thinking 块、tool_use / tool_result |
+| 网页面板 | `http://127.0.0.1:17890/panel` —— 看各账号积分、添加/删除/禁用、强制续期、重绑设备标识、实时日志 |
 | 多账号 | `balance`（默认，按可用积分）· `round_robin`（轮询）· `lru`（最久未用）三种策略；账号级冷却；失败自动换号重试；额度跟踪 |
+| 设备标识 | 每个账号在首次登录时随机生成一套独立设备标识并绑定，之后每次续期都复用它 |
 | 登录态 | 密码登录、短信登录、导入桌面客户端登录态、到期前自动重登 |
 | 运维 | `/health`、`/v1/points`、`/v1/admin/accounts`，请求日志记录模型 / tokens / 扣分 / 耗时 |
 | 安全 | 可选给网关自己加 API Key；密码等敏感文件默认不进 git |
@@ -109,6 +111,54 @@ export ANTHROPIC_API_KEY=随便填
 `cooldown_seconds` 秒，然后**自动换下一个账号重试**（`max_retries`）。
 当前每个账号的状态在 `GET /v1/admin/accounts` 里一目了然。
 
+## 网页面板
+
+浏览器打开 <http://127.0.0.1:17890/panel>（直接开根路径也是这个页面）：
+
+* 每个账号的积分（可用 = 余额 + 每日额度）、登录态剩余天数、请求数/已扣分、冷却状态、最近错误
+* 添加账号（手机号 + 密码 → 立刻登录；也可以只贴一个 session）
+* 强制续期、禁用/启用、删除
+* **重绑设备标识**（见下一节）
+* 实时日志尾巴，可自动刷新
+
+如果配置了 `api_keys`，面板的接口就需要这个 Key（页面本身保持公开，方便你填 Key），
+Key 存在浏览器 localStorage 里。
+
+## 账号设备标识（指纹）
+
+每个账号在**首次登录时**随机生成一套独立设备标识，并绑定写进 `accounts.json`：
+
+```json
+"identity": {
+  "devid": "web-0ca44246df704952",
+  "ua": "Loomy|Desktop|Electron|macOS",
+  "modelid": "Web", "version": "1.0.0",
+  "campus_device_id": "loomy-campus-0cbce23d-6ec2-4ee5-9591-f43408d23896",
+  "created_at": 1790471588
+}
+```
+
+之后每次续期、每次请求都用同一套，所以一个账号始终表现为同一台设备，
+而不是所有账号都对外宣布 `devid: web`。
+
+**说清楚它是什么、不是什么**：协议里真正涉及"设备"的字段只有四个
+（`devid`、`ua`、`modelid`/`version`，加一个每请求随机的 `traceid`），
+而校园推广用的设备号只出现在 `/points/activation` 和 `/points/first-login` 的请求体里，
+**不会随对话请求发出**。绑独立标识能让账号在这些字段上互不雷同，
+但它**不改变出口 IP**——而 IP 才是大多数风控真正看的东西。
+所以请把它当"账号隔离"，不要当"防封保证"。
+
+`config.json` 里的 `identity_mode`：
+
+| 值 | 行为 |
+|---|---|
+| `per_account`（默认） | 每个账号独立 `devid`（`web-<16 位 hex>`）和校园设备号；`ua`/`modelid`/`version` 仍用真实客户端的值 |
+| `client` | 完全照抄官方客户端（`devid: web`） |
+
+重绑方式：面板上的"换标识"，或
+`POST /api/panel/accounts/identity {"name": "...", "regenerate": true}` ——
+它会生成一套新标识**并**用新标识重新登录一次。
+
 ## 模型清单
 
 上游 `/models` 返回什么就暴露什么，另外加上你配置的别名。典型清单
@@ -170,6 +220,7 @@ loomy2api remove <名字>
 loomy2api login [名字…]          登录 / 强制续期
 loomy2api sms <手机号>           发短信验证码（短信登录第一步）
 loomy2api verify <名字> <手机号> <验证码> <msgid>
+loomy2api identity <名字> [--rebind]   查看 / 重绑设备标识
 loomy2api models                列出上游模型
 loomy2api quota                 各账号积分
 loomy2api chat "问题"            走账号池发一次请求自检

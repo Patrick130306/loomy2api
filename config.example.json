@@ -39,6 +39,8 @@
   "_pool": "accounts_file holds your accounts (gitignored). strategy: balance | round_robin | lru",
   "accounts_file": "accounts.json",
   "strategy": "balance",
+  "_identity": "per_account = each account gets its own devid + promotions device id, bound on first login; client = mirror the shipped client exactly (devid: web)",
+  "identity_mode": "per_account",
   "max_retries": 2,
   "cooldown_seconds": 300,
   "session_renew_before_days": 3,

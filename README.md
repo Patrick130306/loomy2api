@@ -26,7 +26,9 @@ renewal.
 |---|---|
 | OpenAI API | `POST /v1/chat/completions` (stream + non-stream), `GET /v1/models`, `POST /v1/embeddings`, `POST /v1/images/generations` |
 | Anthropic API | `POST /v1/messages` (stream + non-stream), thinking blocks, tool use / tool results |
+| Web panel | `http://127.0.0.1:17890/panel` — quota per account, add / remove / disable, force renew, rebind device identity, live log tail |
 | Accounts | pool with `balance` · `round_robin` · `lru` strategies, per-account cooldown, automatic retry on another account, quota tracking |
+| Identity | every account gets its own bound device identity (`devid` + promotions device id) generated at first login and reused on every renewal |
 | Sessions | password login, SMS login, desktop-client session import, automatic renewal before the 14-day expiry |
 | Ops | `/health`, `/v1/points`, `/v1/admin/accounts`, request log with model / tokens / `points_consumed` / latency |
 | Security | optional API-key gate for the gateway itself; secrets stay out of git |
@@ -117,6 +119,58 @@ On `401/403` the session is dropped, on `402`/quota exhaustion the account is
 cooled down for `cooldown_seconds`, and the request is retried on the next
 account (`max_retries`). Everything is visible in `GET /v1/admin/accounts`.
 
+## Web control panel
+
+Open <http://127.0.0.1:17890/panel> (the bare host also serves it):
+
+* every account with its points (`available = balance + daily grant`), session
+  days left, request/points counters, cooldown state and last error
+* add an account (phone + password → logged in immediately, or paste a session)
+* force renew, disable/enable, delete
+* **rebind device identity** — see below
+* live tail of the gateway log, auto-refresh
+
+If `api_keys` is set, the panel's JSON API requires it (the page itself stays
+public so you can enter the key); the key is kept in `localStorage`.
+
+## Account identity (device fingerprint)
+
+At first login each account is given its own **device identity** and that
+identity is bound to the account in `accounts.json`:
+
+```json
+"identity": {
+  "devid": "web-0ca44246df704952",
+  "ua": "Loomy|Desktop|Electron|macOS",
+  "modelid": "Web", "version": "1.0.0",
+  "campus_device_id": "loomy-campus-0cbce23d-6ec2-4ee5-9591-f43408d23896",
+  "created_at": 1790471588
+}
+```
+
+Every later login and every request reuses it, so one account always looks like
+one consistent device instead of every account announcing `devid: web`.
+
+Be clear about what this is and is not: the protocol only carries four
+device-ish fields (`devid`, `ua`, `modelid`/`version` plus a per-request random
+`traceid`), and the promotions device id is only sent with
+`/points/activation` and `/points/first-login` bodies — never with chat
+requests. Binding a distinct identity keeps accounts separated in those fields;
+it does **not** change your network origin (IP), which is what most risk
+control actually keys on. Treat it as account isolation, not as a ban
+guarantee.
+
+`identity_mode` in `config.json`:
+
+| value | behaviour |
+|---|---|
+| `per_account` (default) | distinct `devid` (`web-<16 hex>`) and campus device id per account; `ua`/`modelid`/`version` stay the real client's values |
+| `client` | mirror the shipped client byte-for-byte (`devid: web`) |
+
+Rebind from the panel ("换标识") or with
+`POST /api/panel/accounts/identity {"name": "...", "regenerate": true}`, which
+generates a fresh identity **and** logs the account in again under it.
+
 ## Model catalogue
 
 Whatever the upstream returns from `/models` is exposed as-is, plus any aliases
@@ -179,6 +233,7 @@ loomy2api remove <name>
 loomy2api login [name …]        log in / force-refresh sessions
 loomy2api sms <phone>           send an SMS code (SMS login path)
 loomy2api verify <name> <phone> <code> <msgid>
+loomy2api identity <name> [--rebind]   show / rebind the device identity
 loomy2api models                list the upstream catalogue
 loomy2api quota                 per-account points
 loomy2api chat "prompt"         one-shot request through a pooled account

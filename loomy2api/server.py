@@ -15,6 +15,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from . import constants as C
 from . import anthropic as anth
+from .panel import Panel
 from .pool import AccountPool, PoolError
 from .upstream import ModelGateway, sse_usage, human_usage
 
@@ -52,6 +53,7 @@ class Gateway:
                                  console=bool(cfg.get("log_console", True)))
         self.pool = AccountPool(cfg, logger=self.log)
         self.models_client = ModelGateway(cfg)
+        self.panel = Panel(self)
         self.models: list = []
         self._models_lock = threading.Lock()
 
@@ -151,6 +153,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:                           # noqa: BLE001
                 pass
 
+    def _query_int(self, name: str, default: int) -> int:
+        from urllib.parse import parse_qs, urlparse as _urlparse
+        values = parse_qs(_urlparse(self.path).query).get(name) or []
+        try:
+            return int(values[0])
+        except (IndexError, ValueError):
+            return default
+
     def _read_body(self) -> bytes:
         if self._body_read:
             return b""
@@ -171,12 +181,22 @@ class Handler(BaseHTTPRequestHandler):
             raise ValueError(f"请求体不是合法 JSON / body is not valid JSON: {exc}") from exc
 
     def _path(self) -> str:
+        """Normalise the path, keeping the non-``/v1`` surfaces intact.
+
+        Clients are sloppy about the prefix, so ``/chat/completions`` is
+        rewritten to ``/v1/chat/completions``; the panel, its API and the
+        health/admin endpoints are exempt.
+        """
         path = self.path.split("?", 1)[0]
         while "/v1/v1" in path:
             path = path.replace("/v1/v1", "/v1")
-        if path != "/v1" and not path.startswith("/v1/"):
-            path = "/v1" + path
-        return path.rstrip("/") or "/v1"
+        if path in ("", "/", "/index.html"):
+            return "/panel"                       # the panel is the landing page
+        exempt = ("/panel", "/api/", "/health", "/admin", "/favicon")
+        if not path.startswith(exempt):
+            if path != "/v1" and not path.startswith("/v1/"):
+                path = "/v1" + path
+        return path.rstrip("/") or "/"
 
     # --------------------------------------------------------------- auth
 
@@ -209,6 +229,8 @@ class Handler(BaseHTTPRequestHandler):
         path = self._path()
         if path in ("/v1/health", "/health"):
             return self._health()
+        if path in ("/panel", "/", "/index.html"):
+            return self._panel_page()
         if not self._authorized():
             return
         try:
@@ -218,6 +240,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._points()
             if path in ("/v1/admin/accounts", "/admin/accounts"):
                 return self._accounts()
+            if path == "/api/panel/state":
+                refresh = "refresh=1" in (self.path or "")
+                return self._json(200, self.gateway.panel.state(refresh=refresh))
+            if path == "/api/panel/logs":
+                lines = self._query_int("lines", 200)
+                return self._json(200, self.gateway.panel.logs(lines))
+            if path == "/favicon.ico":
+                return self._error(404, "no favicon")
             return self._error(404, f"未知路径 / unknown path: {self.path}")
         except PoolError as exc:
             return self._error(503, str(exc), "account_pool_error")
@@ -242,11 +272,13 @@ class Handler(BaseHTTPRequestHandler):
                 self.gateway.pool.load()
                 self.gateway.refresh_models()
                 return self._json(200, self.gateway.pool.snapshot())
+            if path.startswith("/api/panel/"):
+                return self._panel_api(path)
             return self._error(404, f"未知路径 / unknown path: {self.path}")
         except ValueError as exc:
             return self._error(400, str(exc))
         except PoolError as exc:
-            return self._error(503, str(exc), "account_pool_error")
+            return self._error(400, str(exc), "account_pool_error")
         except Exception as exc:                        # noqa: BLE001
             self.gateway.log(f"[error] POST {self.path}: {exc}\n{traceback.format_exc()}")
             try:
@@ -254,6 +286,36 @@ class Handler(BaseHTTPRequestHandler):
                                    "upstream_error")
             except Exception:                           # noqa: BLE001
                 return
+
+    # ------------------------------------------------------------- panel
+
+    def _panel_page(self) -> None:
+        body = self.gateway.panel.html()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _panel_api(self, path: str) -> None:
+        payload = self._read_json()
+        panel = self.gateway.panel
+        handlers = {
+            "/api/panel/accounts": panel.add_account,
+            "/api/panel/accounts/update": panel.update_account,
+            "/api/panel/accounts/remove": panel.remove_account,
+            "/api/panel/accounts/renew": panel.renew_account,
+            "/api/panel/accounts/identity": panel.identity,
+            "/api/panel/refresh": lambda _p: panel.refresh(_p),
+        }
+        handler = handlers.get(path)
+        if handler is None:
+            return self._error(404, f"未知面板接口 / unknown panel endpoint: {path}")
+        result = handler(payload)
+        if not isinstance(result, dict):
+            result = {"ok": True, "result": result}
+        return self._json(200, result)
 
     # ------------------------------------------------------ simple routes
 
@@ -269,6 +331,7 @@ class Handler(BaseHTTPRequestHandler):
             "models": len(gw.catalogue()),
             "auth_required": bool(gw.cfg.api_keys),
             "strategy": gw.cfg.get("strategy"),
+            "panel": f"http://{gw.cfg['host']}:{gw.cfg['port']}/panel",
         })
 
     def _models(self) -> None:

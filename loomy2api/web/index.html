@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>loomy2api · 控制面板</title>
+<style>
+  :root{
+    --bg:#0f1115; --panel:#171a21; --panel2:#1d212a; --line:#272c38;
+    --fg:#e6e9ef; --muted:#9aa3b8; --accent:#5b9dff; --ok:#3ecf8e;
+    --warn:#f5a524; --bad:#f2545b; --radius:10px;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font:14px/1.55 "Segoe UI",system-ui,-apple-system,"Microsoft YaHei",sans-serif}
+  a{color:var(--accent)}
+  .wrap{max-width:1180px;margin:0 auto;padding:22px 18px 60px}
+  header{display:flex;flex-wrap:wrap;gap:14px;align-items:baseline;
+    justify-content:space-between;margin-bottom:16px}
+  h1{margin:0;font-size:20px;letter-spacing:.4px}
+  h1 span{color:var(--muted);font-weight:400;font-size:13px;margin-left:8px}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:12px 14px;min-width:0;overflow:hidden}
+  .card .k{color:var(--muted);font-size:12px}
+  .card .v{font-size:20px;font-weight:600;margin-top:2px;overflow-wrap:anywhere}
+  .card .v small{font-size:11.5px;color:var(--muted);font-weight:400;
+    display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  section{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    padding:14px;margin-bottom:16px}
+  section h2{margin:0 0 12px;font-size:15px;font-weight:600}
+  section h2 small{color:var(--muted);font-weight:400;font-size:12px;margin-left:6px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:9px 8px;text-align:left;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{color:var(--muted);font-weight:500;font-size:12px;white-space:nowrap}
+  tbody tr:hover{background:var(--panel2)}
+  .mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:var(--muted)}
+  .badge{display:inline-block;padding:1px 8px;border-radius:20px;font-size:12px;white-space:nowrap}
+  .b-ok{background:rgba(62,207,142,.14);color:var(--ok)}
+  .b-warn{background:rgba(245,165,36,.14);color:var(--warn)}
+  .b-bad{background:rgba(242,84,91,.14);color:var(--bad)}
+  .b-off{background:rgba(139,147,167,.14);color:var(--muted)}
+  button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+    border-radius:8px;padding:0 12px;height:34px;font-size:12px;cursor:pointer}
+  button:hover{border-color:var(--accent);color:#fff}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#08111f;font-weight:600}
+  button.danger:hover{border-color:var(--bad);color:var(--bad)}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  input,select{background:var(--panel2);border:1px solid var(--line);color:var(--fg);
+    border-radius:8px;padding:0 10px;height:34px;font-size:13px;min-width:0;width:100%}
+  input:focus,select:focus{outline:none;border-color:var(--accent)}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;align-items:end}
+  td .row button{height:28px;padding:0 9px}
+  input[type=checkbox]{width:auto;height:auto;margin:0 6px 0 0;vertical-align:middle}
+  label{display:block;color:var(--muted);font-size:12px;margin-bottom:4px}
+  pre#log{background:#0b0d11;border:1px solid var(--line);border-radius:8px;
+    padding:10px;max-height:260px;overflow:auto;font-size:12px;line-height:1.5;
+    white-space:pre-wrap;color:#b9c2d4;margin:0}
+  #toast{position:fixed;right:16px;bottom:16px;display:flex;flex-direction:column;gap:8px;z-index:9}
+  .toast{background:var(--panel2);border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:8px;padding:9px 12px;max-width:420px;font-size:13px;box-shadow:0 8px 24px rgba(0,0,0,.35)}
+  .toast.err{border-left-color:var(--bad)}
+  .toast.ok{border-left-color:var(--ok)}
+  .muted{color:var(--muted)}
+  .hint{color:var(--muted);font-size:12px;margin-top:8px}
+  details summary{cursor:pointer;color:var(--muted);font-size:12px}
+  @media (max-width:760px){table{display:block;overflow-x:auto;white-space:nowrap}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>loomy2api<span>控制面板 / control panel</span></h1>
+    <div class="row">
+      <input id="apiKey" type="password" placeholder="API Key（如需）" style="width:170px">
+      <button id="saveKey">保存 Key</button>
+      <label class="row" style="margin:0;color:var(--muted)">
+        <input id="auto" type="checkbox" checked style="min-width:auto"> 自动刷新
+      </label>
+      <button class="primary" id="refresh">刷新额度</button>
+    </div>
+  </header>
+
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <h2>账号 <small>accounts</small></h2>
+    <table>
+      <thead>
+        <tr>
+          <th>名称</th><th>手机号</th><th>状态</th><th>剩余</th>
+          <th>可用积分</th><th>请求</th><th>扣分</th><th>设备标识</th><th>操作</th>
+        </tr>
+      </thead>
+      <tbody id="rows"><tr><td colspan="9" class="muted">加载中…</td></tr></tbody>
+    </table>
+    <div class="hint" id="poolHint"></div>
+  </section>
+
+  <section>
+    <h2>添加账号 <small>add account</small></h2>
+    <div class="grid">
+      <div><label>名称 name</label><input id="f-name" placeholder="main"></div>
+      <div><label>手机号 phone</label><input id="f-phone" placeholder="13800000000"></div>
+      <div><label>密码 password</label><input id="f-pass" type="password" placeholder="账号中心里设的密码"></div>
+      <div><label>或 session（可选）</label><input id="f-session" placeholder="32 位 session"></div>
+      <div><label>策略 strategy</label><select id="f-login">
+        <option value="1">添加后立即登录</option><option value="0">只保存不登录</option>
+      </select></div>
+      <div><button class="primary" id="add">添加并绑定设备标识</button></div>
+    </div>
+    <div class="hint">密码需要先在讯飞账号中心设置一次；添加成功后会自动为本账号随机生成一套设备标识（devid / 校园设备号）并绑定，之后每次续期都用同一套。</div>
+  </section>
+
+  <section>
+    <h2>运行日志 <small>recent log</small></h2>
+    <div class="row" style="margin-bottom:8px">
+      <button id="loadLog">刷新日志</button>
+      <span class="muted mono" id="logPath"></span>
+    </div>
+    <pre id="log"></pre>
+  </section>
+
+  <details>
+    <summary>接口速查 / endpoints</summary>
+    <div class="hint mono" style="line-height:1.9;margin-top:8px">
+      OpenAI: POST /v1/chat/completions · GET /v1/models · POST /v1/embeddings · POST /v1/images/generations<br>
+      Anthropic: POST /v1/messages<br>
+      控制面板 API: GET /api/panel/state · POST /api/panel/accounts · /accounts/update · /accounts/remove · /accounts/renew · /accounts/identity · /refresh
+    </div>
+  </details>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let KEY = localStorage.getItem('loomy2api_key') || '';
+
+function toast(msg, kind) {
+  const el = document.createElement('div');
+  el.className = 'toast ' + (kind || '');
+  el.textContent = msg;
+  $('toast').appendChild(el);
+  setTimeout(() => el.remove(), kind === 'err' ? 9000 : 4500);
+}
+
+async function api(path, opts) {
+  const o = Object.assign({headers: {}}, opts || {});
+  if (KEY) { o.headers['Authorization'] = 'Bearer ' + KEY; }
+  if (o.body) { o.headers['Content-Type'] = 'application/json'; }
+  const res = await fetch(path, o);
+  let data = null;
+  try { data = await res.json(); } catch (e) { data = null; }
+  if (!res.ok) {
+    const msg = (data && data.error && (data.error.message || data.error)) || ('HTTP ' + res.status);
+    throw new Error(typeof msg === 'string' ? msg : JSON.stringify(msg));
+  }
+  return data;
+}
+
+function badge(a) {
+  if (!a.enabled) return '<span class="badge b-off">已禁用</span>';
+  if (a.in_cooldown) return '<span class="badge b-warn">冷却 ' + Math.round(a.cooldown_seconds_left) + 's</span>';
+  if (!a.session) return '<span class="badge b-bad">无登录态</span>';
+  if (a.session_days_left !== null && a.session_days_left < 3)
+    return '<span class="badge b-warn">即将到期</span>';
+  if (a.available === 0) return '<span class="badge b-warn">额度用尽</span>';
+  return '<span class="badge b-ok">正常</span>';
+}
+
+function num(v) { return (v === null || v === undefined) ? '—' : v; }
+
+function render(state) {
+  const t = state.totals, c = state.config;
+  $('cards').innerHTML = [
+    ['账号 Accounts', t.accounts + ' <small>/ 可用 ' + t.usable + '</small>'],
+    ['可用积分 Available', t.available + (t.unique_accounts !== t.accounts ? ' <small>(去重 ' + t.unique_accounts + ' 号)</small>' : '')],
+    ['请求 Requests', t.requests],
+    ['已扣分 Points used', t.points_used],
+    ['上游 Upstream', '<small class="mono">' + c.upstream + '</small>'],
+    ['策略 / 设备标识', '<small>' + c.strategy + ' / ' + c.identity_mode + '</small>'],
+  ].map(([k, v]) => '<div class="card"><div class="k">' + k + '</div><div class="v">' + v + '</div></div>').join('');
+
+  $('poolHint').textContent = '模型 ' + c.models + ' 个 · 默认 ' + c.default_model
+    + ' · 额度缓存 ' + c.quota_refresh_minutes + ' 分钟'
+    + (c.auth_required ? ' · 面板已开启 API Key 校验' : ' · 面板未设 API Key（仅本机使用）');
+
+  if (!state.accounts.length) {
+    $('rows').innerHTML = '<tr><td colspan="9" class="muted">还没有账号，用下面的表单添加</td></tr>';
+    return;
+  }
+  $('rows').innerHTML = state.accounts.map(a => {
+    const id = a.identity || {};
+    return '<tr>'
+      + '<td><b>' + a.name + '</b><div class="mono">' + (a.source === 'client' ? 'client 导入' : (a.mode === 'session' ? '仅 session' : '手机号+密码')) + '</div></td>'
+      + '<td class="mono">' + (a.loginid_masked || '—') + '</td>'
+      + '<td>' + badge(a) + '</td>'
+      + '<td>' + (a.session_days_left === null ? '—' : a.session_days_left.toFixed(1) + ' 天') + '</td>'
+      + '<td><b>' + num(a.available) + '</b><div class="mono">余额 ' + num(a.balance) + ' + 每日 ' + num(a.daily_balance) + '</div></td>'
+      + '<td>' + a.requests + '</td><td>' + a.points_used + '</td>'
+      + '<td class="mono" title="' + (id.campus_device_id || '') + '">' + (id.devid || '—') + '</td>'
+      + '<td><div class="row" style="gap:6px">'
+      + '<button onclick="act(\'renew\',\'' + a.name + '\')">续期</button>'
+      + '<button onclick="act(\'identity\',\'' + a.name + '\')">换标识</button>'
+      + '<button onclick="act(\'toggle\',\'' + a.name + '\',' + (!a.enabled) + ')">' + (a.enabled ? '禁用' : '启用') + '</button>'
+      + '<button class="danger" onclick="act(\'remove\',\'' + a.name + '\')">删除</button>'
+      + '</div></td></tr>';
+  }).join('');
+}
+
+async function load(refresh) {
+  try {
+    const state = await api('/api/panel/state' + (refresh ? '?refresh=1' : ''));
+    render(state);
+  } catch (e) {
+    toast('读取状态失败：' + e.message, 'err');
+  }
+}
+
+async function act(kind, name, value) {
+  const map = {
+    renew: ['/api/panel/accounts/renew', {name}],
+    identity: ['/api/panel/accounts/identity', {name, regenerate: true}],
+    toggle: ['/api/panel/accounts/update', {name, enabled: value}],
+    remove: ['/api/panel/accounts/remove', {name}],
+  };
+  if (kind === 'remove' && !confirm('确认删除账号 ' + name + '？')) return;
+  const [path, body] = map[kind];
+  try {
+    const res = await api(path, {method: 'POST', body: JSON.stringify(body)});
+    if (res.error) { toast(name + '：' + res.error, 'err'); }
+    else if (kind === 'identity') { toast(name + ' 已换新设备标识：' + res.identity.devid, 'ok'); }
+    else { toast(name + ' 操作完成', 'ok'); }
+    if (res.state) render(res.state); else load();
+  } catch (e) {
+    toast(name + ' 操作失败：' + e.message, 'err');
+  }
+}
+
+async function addAccount() {
+  const body = {
+    name: $('f-name').value.trim(),
+    loginid: $('f-phone').value.trim(),
+    password: $('f-pass').value,
+    session: $('f-session').value.trim(),
+    login: $('f-login').value === '1',
+  };
+  try {
+    const res = await api('/api/panel/accounts', {method: 'POST', body: JSON.stringify(body)});
+    if (res.logged_in === false) toast('已添加，但登录失败：' + res.error, 'err');
+    else toast('已添加 ' + res.name + '（devid ' + res.identity.devid + '）', 'ok');
+    $('f-name').value = $('f-phone').value = $('f-pass').value = $('f-session').value = '';
+    if (res.state) render(res.state);
+  } catch (e) {
+    toast('添加失败：' + e.message, 'err');
+  }
+}
+
+async function loadLog() {
+  try {
+    const res = await api('/api/panel/logs?lines=250');
+    $('logPath').textContent = res.path;
+    $('log').textContent = res.lines.join('\n');
+    $('log').scrollTop = $('log').scrollHeight;
+  } catch (e) { toast('读取日志失败：' + e.message, 'err'); }
+}
+
+$('refresh').onclick = () => load(true).then(loadLog);
+$('add').onclick = addAccount;
+$('loadLog').onclick = loadLog;
+$('saveKey').onclick = () => {
+  KEY = $('apiKey').value.trim();
+  localStorage.setItem('loomy2api_key', KEY);
+  toast('已保存 API Key', 'ok');
+  load(true); loadLog();
+};
+$('apiKey').value = KEY;
+
+load(); loadLog();
+setInterval(() => { if ($('auto').checked) load(); }, 10000);
+setInterval(() => { if ($('auto').checked) loadLog(); }, 30000);
+</script>
+</body>
+</html>

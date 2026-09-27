@@ -13,6 +13,13 @@ Login paths (both fully server-side, no desktop client involved):
   nonce, so this is fully automatable.
 * SMS — ``/login/phone/sendMsgCode`` → ``msgid``, then
   ``/login/phone/checkCode``.  Needs a human to read the code once.
+
+Each account carries a per-account **identity** (see :func:`new_identity`): the
+only device-ish fields the protocol actually carries are ``devid``, ``ua``,
+``modelid``/``version`` in the request envelope plus a per-request random
+``traceid``.  Binding a distinct identity per account keeps accounts visually
+separate instead of all announcing ``devid=web``; it does **not** change the
+network origin, which is what most risk control looks at.
 """
 
 from __future__ import annotations
@@ -28,7 +35,8 @@ from .crypto import rsa_encrypt
 from .httpc import request as http_request
 from .signer import build_headers
 
-__all__ = ["Account", "AccountClient", "AccountError"]
+__all__ = ["Account", "AccountClient", "AccountError", "new_identity",
+           "IDENTITY_FIELDS"]
 
 
 class AccountError(RuntimeError):
@@ -38,6 +46,41 @@ class AccountError(RuntimeError):
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+
+
+# --------------------------------------------------------------------- identity
+
+#: Fields that make up an account identity, i.e. the values a request envelope
+#: announces about "which device is this".
+IDENTITY_FIELDS = ("devid", "ua", "modelid", "version", "campus_device_id")
+
+
+def new_identity(mode: str = "per_account", *, rng=None) -> Dict[str, Any]:
+    """Build a device identity for one account.
+
+    ``mode``:
+
+    * ``per_account`` (default) — a distinct ``devid`` per account
+      (``web-<16 hex>``), a distinct promotions ``campus_device_id``. ``ua`` /
+      ``modelid`` / ``version`` stay the real client's values, because a
+      made-up UA is more conspicuous than a repeated one.
+    * ``client`` — mirror the shipped client exactly (``devid: "web"``), for
+      when you want byte-identical requests.
+
+    ``traceid`` is deliberately *not* part of the identity: the real client
+    generates a fresh one per request.
+    """
+    ident: Dict[str, Any] = {
+        "devid": C.DEVICE_ID if mode == "client" else f"web-{uuid.uuid4().hex[:16]}",
+        "ua": C.CLIENT_UA,
+        "modelid": C.WEB_MODEL_ID,
+        "version": C.CLIENT_VERSION,
+        "campus_device_id": f"{C.CAMPUS_DEVICE_ID_PREFIX}{uuid.uuid4()}",
+        "created_at": int(time.time()),
+    }
+    if mode == "client":
+        ident["campus_device_id"] = ""
+    return ident
 
 
 @dataclass
@@ -54,6 +97,9 @@ class Account:
     userid: str = ""
     expire_at: int = 0           # unix seconds
     obtained_at: int = 0
+
+    #: per-account device identity (devid / ua / campus device id / …)
+    identity: Dict[str, Any] = field(default_factory=dict)
 
     # quota cache (filled from /points/records)
     balance: Optional[int] = None
@@ -96,6 +142,7 @@ class Account:
     @classmethod
     def from_dict(cls, raw: Dict[str, Any], index: int = 0) -> "Account":
         name = str(raw.get("name") or raw.get("loginid") or f"account{index + 1}")
+        identity = raw.get("identity")
         return cls(
             name=name,
             loginid=str(raw.get("loginid") or raw.get("phone") or ""),
@@ -105,6 +152,7 @@ class Account:
             userid=str(raw.get("userid") or ""),
             expire_at=int(raw.get("expireAt") or raw.get("expire_at") or 0),
             obtained_at=int(raw.get("obtainedAt") or raw.get("obtained_at") or 0),
+            identity=dict(identity) if isinstance(identity, dict) else {},
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -124,17 +172,36 @@ class Account:
             out["expireAt"] = self.expire_at
         if self.obtained_at:
             out["obtainedAt"] = self.obtained_at
+        if self.identity:
+            out["identity"] = self.identity
         return out
+
+    def identity_view(self) -> Dict[str, Any]:
+        """Identity as shown in the panel / admin API (nothing secret in it)."""
+        ident = self.identity or {}
+        return {
+            "devid": ident.get("devid", ""),
+            "ua": ident.get("ua", ""),
+            "modelid": ident.get("modelid", ""),
+            "version": ident.get("version", ""),
+            "campus_device_id": ((ident.get("campus_device_id") or "")[:32] + "…"
+                                 if len(ident.get("campus_device_id") or "") > 32
+                                 else ident.get("campus_device_id", "")),
+            "created_at": ident.get("created_at", 0),
+            "bound": bool(ident),
+        }
 
     def public_dict(self) -> Dict[str, Any]:
         """Status view without secrets (used by /admin/accounts)."""
         out = {
             "name": self.name,
+            "loginid": self.loginid,
             "userid": self.userid,
             "enabled": self.enabled,
             "has_password": bool(self.password),
             "session": (self.session[:8] + "…") if self.session else "",
             "session_days_left": (round(self.days_left, 2) if self.days_left is not None else None),
+            "expire_at": self.expire_at,
             "balance": self.balance,
             "daily_balance": self.daily_balance,
             "available": self.available,
@@ -147,6 +214,7 @@ class Account:
                                       if self.in_cooldown else 0),
             "source": self.source,
             "last_error": self.last_error,
+            "identity": self.identity_view(),
         }
         return out
 
@@ -159,18 +227,24 @@ class AccountClient:
 
     # -- plumbing -------------------------------------------------------
 
-    def _base(self) -> Dict[str, str]:
+    def identity_mode(self) -> str:
+        return str(self.cfg.get("identity_mode") or "per_account")
+
+    def _base(self, identity: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+        ident = dict(identity or {}) or new_identity(self.identity_mode())
         return {
             "appid": self.cfg.get("account_appid") or C.DEFAULT_ACCOUNT_APPID,
-            "modelid": C.WEB_MODEL_ID,
-            "version": C.CLIENT_VERSION,
-            "devid": C.DEVICE_ID,
-            "ua": C.CLIENT_UA,
+            "modelid": str(ident.get("modelid") or C.WEB_MODEL_ID),
+            "version": str(ident.get("version") or C.CLIENT_VERSION),
+            "devid": str(ident.get("devid") or C.DEVICE_ID),
+            "ua": str(ident.get("ua") or C.CLIENT_UA),
+            # the real client regenerates traceid on every single request
             "traceid": uuid.uuid4().hex,
         }
 
     def call(self, path: str, body: Optional[dict] = None,
-             *, timeout: float = 30) -> Dict[str, Any]:
+             *, identity: Optional[Dict[str, Any]] = None,
+             timeout: float = 30) -> Dict[str, Any]:
         body_str = json.dumps(body, ensure_ascii=False) if body else ""
         headers = build_headers(
             self.cfg.ak_id, self.cfg.ak_secret,
@@ -205,23 +279,35 @@ class AccountClient:
                                code=f"HTTP_{status}", retryable=status >= 500)
         return payload
 
+    def ensure_identity(self, account: "Account") -> Dict[str, Any]:
+        """Give the account an identity if it does not have one yet."""
+        if not account.identity:
+            account.identity = new_identity(self.identity_mode())
+        return account.identity
+
+    def rebind_identity(self, account: "Account") -> Dict[str, Any]:
+        """Generate a fresh identity for the account (new "device")."""
+        account.identity = new_identity(self.identity_mode())
+        return account.identity
+
     # -- login ----------------------------------------------------------
 
-    def get_public_key(self) -> Tuple[str, str]:
+    def get_public_key(self, identity: Optional[Dict[str, Any]] = None) -> Tuple[str, str]:
         """→ ``(pukey_b64, rcode)``.  Zero side effects: a good first probe."""
-        payload = self.call("/login/account/getPuKey", {"base": self._base()})
+        payload = self.call("/login/account/getPuKey", {"base": self._base(identity)})
         data = payload.get("data") or {}
         pukey, rcode = data.get("pukey") or "", data.get("rcode") or ""
         if not pukey:
             raise AccountError("getPuKey returned no public key", code="NO_PUKEY")
         return pukey, rcode
 
-    def login_by_password(self, loginid: str, password: str) -> Dict[str, str]:
+    def login_by_password(self, loginid: str, password: str,
+                          identity: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
         """Full password login → ``{session, userid, phone}``."""
-        pukey, rcode = self.get_public_key()
+        pukey, rcode = self.get_public_key(identity)
         encrypted = rsa_encrypt(pukey, password)
         payload = self.call("/login/account/byPwd", {
-            "base": self._base(),
+            "base": self._base(identity),
             "param": {
                 "loginid": loginid,
                 "password": encrypted,
@@ -232,37 +318,47 @@ class AccountClient:
         })
         return _extract_session(payload)
 
-    def send_sms_code(self, phone: str) -> Dict[str, Any]:
+    def send_sms_code(self, phone: str,
+                      identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self.call("/login/phone/sendMsgCode", {
-            "base": self._base(),
+            "base": self._base(identity),
             "param": {"ccode": "86", "phone": phone, "expire": 300},
         })
 
-    def login_by_sms(self, phone: str, code: str, msgid: str) -> Dict[str, str]:
+    def login_by_sms(self, phone: str, code: str, msgid: str,
+                     identity: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
         payload = self.call("/login/phone/checkCode", {
-            "base": self._base(),
+            "base": self._base(identity),
             "param": {"ccode": "86", "phone": phone, "mcode": code, "msgid": msgid,
                       "expire": C.SESSION_EXPIRE_SECONDS},
         })
         return _extract_session(payload)
 
-    def query_base_info(self, session: str) -> Dict[str, Any]:
+    def query_base_info(self, session: str,
+                        identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self.call("/userinfo/query/baseInfo",
-                         {"base": self._base(), "param": {"session": session}})
+                         {"base": self._base(identity), "param": {"session": session}})
 
-    def logout(self, session: str) -> Dict[str, Any]:
+    def logout(self, session: str,
+               identity: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self.call("/login/account/logout",
-                         {"base": self._base(), "param": {"session": session}})
+                         {"base": self._base(identity), "param": {"session": session}})
 
     # -- convenience ----------------------------------------------------
 
     def fill(self, account: Account) -> Account:
-        """Log the account in (password path) and refresh its session fields."""
+        """Log the account in (password path) and refresh its session fields.
+
+        Also binds the account's own identity — created on first login, then
+        reused for every later request so the account keeps looking like one
+        consistent device.
+        """
         if not account.loginid or not account.password:
             raise AccountError(
                 f"account {account.name}: loginid/password missing",
                 code="NO_CREDENTIALS")
-        got = self.login_by_password(account.loginid, account.password)
+        identity = self.ensure_identity(account)
+        got = self.login_by_password(account.loginid, account.password, identity)
         account.session = got["session"]
         account.userid = got.get("userid", "")
         account.obtained_at = int(time.time())

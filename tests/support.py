@@ -242,6 +242,58 @@ class FakeUpstream:
 # ------------------------------------------------------------------ cfg/pool
 
 
+class FakeAccountClient:
+    """Stand-in for :class:`loomy2api.account.AccountClient` (no network).
+
+    Records logins so tests can assert *when* a session was refreshed, and
+    mimics identity binding without touching the account service.
+    """
+
+    def __init__(self, session_prefix: str = "testsession"):
+        self.fills: List[str] = []
+        self.rebinds: List[str] = []
+        self.session_prefix = session_prefix
+        self.counter = 0
+
+    def identity_mode(self) -> str:
+        return "per_account"
+
+    def ensure_identity(self, account):
+        from loomy2api.account import new_identity
+        if not account.identity:
+            account.identity = new_identity("per_account")
+        return account.identity
+
+    def rebind_identity(self, account):
+        from loomy2api.account import new_identity
+        account.identity = new_identity("per_account")
+        self.rebinds.append(account.name)
+        return account.identity
+
+    def fill(self, account):
+        import time as _time
+        self.counter += 1
+        self.fills.append(account.name)
+        account.session = f"{self.session_prefix}{self.counter}"
+        account.userid = account.userid or f"uid-{account.loginid}"
+        account.obtained_at = int(_time.time())
+        account.expire_at = account.obtained_at + 14 * 86400
+        return account
+
+    # SMS helper used by the CLI paths
+    def send_sms_code(self, phone, identity=None):
+        return {"code": "000000", "data": {"msgid": "msgid-test"}}
+
+    def login_by_sms(self, phone, code, msgid, identity=None):
+        return {"session": "sms-session", "userid": "uid-sms", "phone": phone}
+
+    def login_by_password(self, loginid, password, identity=None):
+        return {"session": "pwd-session", "userid": f"uid-{loginid}", "phone": loginid}
+
+    def get_public_key(self, identity=None):
+        return "MIGfMA0GCSqGSIb3DQEBAQUAA4GNADCBiQKBgQDN", "rcode-test"
+
+
 def write_accounts(path: Path, accounts: List[Dict[str, Any]]) -> None:
     path.write_text(json.dumps({"accounts": accounts}, ensure_ascii=False),
                     encoding="utf-8")

@@ -57,6 +57,9 @@ DEFAULTS: Dict[str, Any] = {
     "quota_refresh_minutes": 30,
     "sessions_from_client": True, # also honour the desktop client's session
     "client_root": "",            # override the client's data dir (tests)
+    # identity_mode: per_account → each account gets its own devid / campus id;
+    #                client       → mirror the shipped client exactly.
+    "identity_mode": "per_account",
 }
 
 ENV_MAP = {

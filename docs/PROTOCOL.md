@@ -141,6 +141,23 @@ iFlytek account centre once, then reuse it forever.
 | `GET /team-points/balance` | team points (requires being switched to a team) |
 | `POST /points/first-login`, `GET/POST /points/activation` | onboarding bonus / invitation codes |
 
+### 5.1 Device identity fields (verified)
+
+The only device-scoped values in the protocol are:
+
+| field | where | client behaviour |
+|---|---|---|
+| `devid` | account-service request envelope (`base`) | constant string `web` |
+| `ua` | same envelope | constant `Loomy\|Desktop\|Electron\|macOS` |
+| `modelid` / `version` | same envelope | `Web` / `1.0.0` |
+| `traceid` | same envelope | fresh random 32-hex per request |
+| `deviceId` (promotions) | body of `/points/activation` and `/points/first-login` **only** | `loomy-campus-<uuid>` or `loomy-campus-fp-<sha256(machineId)>` |
+
+Note what is *not* there: `/chat/completions` carries no device field at all,
+and the promotions device id never leaves the two points endpoints. So
+"per-account device identity" can only ever change these four envelope values —
+it does not change the network origin, which is what most risk control keys on.
+
 Quota model: `availableBalance = balance (permanent) + dailyBalance (free daily
 grant, consumed first, resets each day)`. Model multipliers (`x0.1` … `x12.0`)
 scale how many points a request costs; `spark-x` at `x0.1` is the cheapest.

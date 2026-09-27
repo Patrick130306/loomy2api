@@ -160,6 +160,31 @@ def cmd_verify(cfg, args) -> int:
     return 0
 
 
+def cmd_identity(cfg, args) -> int:
+    pool = _pool(cfg)
+    acc = pool.get(args.name)
+    if acc is None:
+        print(f"没有名为 {args.name} 的账号")
+        return 1
+    if args.rebind:
+        try:
+            pool.rebind_identity(args.name)
+            print(f"✓ {args.name} 已绑定新设备标识 devid={acc.identity.get('devid')}")
+        except (AccountError, PoolError) as exc:
+            print(f"✗ 重绑失败：{exc}")
+            return 1
+    view = acc.identity_view()
+    print(f"{args.name} 设备标识：")
+    for key in ("devid", "ua", "modelid", "version", "campus_device_id"):
+        print(f"  {key:<18}{view.get(key) or '—'}")
+    if view.get("created_at"):
+        print(f"  {'created_at':<18}"
+              f"{time.strftime('%Y-%m-%d %H:%M', time.localtime(view['created_at']))}")
+    if not view.get("bound"):
+        print("  （尚未绑定，下次登录或 --rebind 时生成）")
+    return 0
+
+
 def cmd_models(cfg, args) -> int:
     pool = _pool(cfg)
     client = ModelGateway(cfg)
@@ -259,6 +284,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("code")
     p.add_argument("msgid")
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("identity", help="查看/重绑账号的设备标识")
+    p.add_argument("name")
+    p.add_argument("--rebind", action="store_true", help="生成新标识并重新登录")
+    p.set_defaults(func=cmd_identity)
 
     p = sub.add_parser("models", help="列出上游模型")
     p.set_defaults(func=cmd_models)

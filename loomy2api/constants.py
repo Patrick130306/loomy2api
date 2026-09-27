@@ -50,6 +50,12 @@ WEB_MODEL_ID = "Web"
 CLIENT_VERSION = "1.0.0"
 CLIENT_UA = "Loomy|Desktop|Electron|macOS"
 
+#: Prefix of the promotions device id the client derives from the machine
+#: fingerprint (``loomy-campus-fp-<sha256(machineId)>``).  It is sent only with
+#: ``/points/activation`` and ``/points/first-login`` bodies — never with chat
+#: requests — but it is the one field that is device-scoped by design.
+CAMPUS_DEVICE_ID_PREFIX = "loomy-campus-"
+
 #: ``X-Loomy-Request-Purpose`` values understood by the upstream (17 total).
 REQUEST_PURPOSES = (
     "chat.message", "chat.title", "pet.comment", "pet.reward",
