@@ -234,7 +234,7 @@ python -m loomy2api verify main 13800000000 <验证码> <msgid>
 ### 1. 安装（Windows / Linux / macOS 通用）
 
 ```bash
-git clone https://github.com/<you>/loomy2api.git
+git clone https://github.com/Patrick130306/loomy2api.git
 cd loomy2api
 
 cp config.example.json config.json      # 可选，默认值就能跑
