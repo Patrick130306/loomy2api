@@ -39,7 +39,7 @@
 ## 快速开始
 
 ```bash
-git clone https://github.com/<you>/loomy2api.git
+git clone https://github.com/Patrick130306/loomy2api.git
 cd loomy2api
 
 cp config.example.json config.json        # 可选，默认值即可用
