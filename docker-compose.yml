@@ -1,0 +1,22 @@
+services:
+  loomy2api:
+    build: .
+    image: loomy2api:latest
+    container_name: loomy2api
+    restart: unless-stopped
+    # Bind to localhost by default. To share it on your LAN change to "17890:17890"
+    # AND set a key in config.json -> "api_keys" (see README, deployment section).
+    ports:
+      - "127.0.0.1:17890:17890"
+    volumes:
+      # accounts.json (created from accounts.example.json) + logs live here
+      - ./data:/data
+    environment:
+      LOOMY_HOST: "0.0.0.0"        # inside the container it must listen on all ifaces
+      LOOMY_PORT: "17890"
+      LOOMY_ACCOUNTS_FILE: "/data/accounts.json"
+      LOOMY_LOG_DIR: "/data/logs"
+      # Optional overrides:
+      # LOOMY_API_KEYS: "sk-change-me"
+      # LOOMY_STRATEGY: "balance"
+      # LOOMY_PROXY: "http://172.17.0.1:7877"

@@ -223,6 +223,171 @@ docker run -d --name loomy2api -p 17890:17890 -v $PWD/data:/data loomy2api
 # put accounts.json in ./data (mounted as /data/accounts.json)
 ```
 
+or with Compose:
+
+```bash
+mkdir -p data && cp accounts.example.json data/accounts.json
+# edit data/accounts.json, then:
+docker compose up -d --build
+docker compose logs -f
+```
+
+## Deployment guide
+
+### 0. Before anything: give the account a password
+
+The desktop client has no "set password" screen — set it once in the **iFlytek
+account centre** (web or mobile), then this project can log in unattended
+forever. No password? Use the SMS path instead:
+
+```bash
+python -m loomy2api sms 13800000000          # sends a code
+python -m loomy2api verify main 13800000000 <code> <msgid>
+```
+
+### 1. Install (Windows / Linux / macOS)
+
+```bash
+git clone https://github.com/<you>/loomy2api.git
+cd loomy2api
+
+cp config.example.json config.json      # optional — defaults work
+cp accounts.example.json accounts.json  # your accounts go here
+chmod 600 accounts.json config.json     # it holds passwords, keep it private
+
+python -m loomy2api add main --phone 13800000000 --password 'your-password'
+python -m loomy2api accounts            # verify: quota + session days left
+
+python -m loomy2api serve               # http://127.0.0.1:17890
+```
+
+* Python **3.9+**, **no dependencies** (pure standard library).
+* `--port 9000` overrides the port; `-c /path/config.json` picks another config.
+* Panel: <http://127.0.0.1:17890/panel>
+
+### 2. Keep it running — Linux (systemd)
+
+```ini
+# /etc/systemd/system/loomy2api.service
+[Unit]
+Description=loomy2api gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=loomy
+WorkingDirectory=/opt/loomy2api
+ExecStart=/usr/bin/python3 -m loomy2api serve
+Restart=always
+RestartSec=5
+UMask=0077                     # accounts.json holds plaintext passwords
+Environment=LOOMY_HOST=127.0.0.1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now loomy2api
+journalctl -u loomy2api -f          # follow the log
+```
+
+### 3. Keep it running — Windows
+
+Task Scheduler (built in, no extra software):
+
+```powershell
+# start.cmd
+@echo off
+cd /d D:\loomy2api
+python -m loomy2api serve >> logs\console.log 2>&1
+
+schtasks /create /tn loomy2api /sc onstart /rl highest /tr "D:\loomy2api\start.cmd" /f
+schtasks /run /tn loomy2api
+```
+
+or NSSM (installs it as a real Windows service):
+
+```powershell
+nssm install loomy2api "C:\Python312\python.exe" "-m loomy2api serve"
+nssm set loomy2api AppDirectory D:\loomy2api
+nssm set loomy2api AppStdout D:\loomy2api\logs\service.log
+nssm start loomy2api
+```
+
+### 4. Docker / Compose
+
+```bash
+mkdir -p data && cp accounts.example.json data/accounts.json   # then edit it
+docker compose up -d --build
+docker compose logs -f
+```
+
+The image is `python:3.12-slim` plus your source — nothing else to install.
+State (`accounts.json`, `logs/`) lives in `./data`, so upgrades are
+`git pull && docker compose up -d --build`.
+
+### 5. Exposing it (optional, read this)
+
+By default the gateway binds `127.0.0.1` — only your machine can reach it.
+To share it on your LAN or the internet:
+
+1. **Set an API key first.** Without `api_keys`, anyone who can reach the port
+   spends your account's points:
+
+   ```json
+   { "api_keys": ["sk-something-long-and-random"] }
+   ```
+2. Then `LOOMY_HOST=0.0.0.0` (or `"host": "0.0.0.0"` in `config.json`).
+3. Put a reverse proxy with TLS in front if it's public. Caddy example:
+
+   ```
+   api.example.com {
+       reverse_proxy 127.0.0.1:17890
+   }
+   ```
+
+Clients then use `https://api.example.com/v1` as the base URL.
+
+> Prefer a VPN/Tailscale/WireGuard over public exposure. This endpoint has no
+> rate limiting of its own, and the upstream account is yours to lose.
+
+### 6. Point your clients at it
+
+| client | setting |
+|---|---|
+| OpenAI SDK / LangChain | `base_url="http://127.0.0.1:17890/v1"`, any `api_key` (or the key you set) |
+| Cherry Studio / LobeChat / NextChat / Open WebUI | provider "OpenAI compatible", base URL above |
+| 沉浸式翻译 / bilingual reader | custom OpenAI endpoint, same base URL |
+| Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:17890` `ANTHROPIC_API_KEY=<any>` |
+| curl | see the quick start above |
+
+Model names: use the upstream ids, or configure `model_aliases` so familiar
+names (`gpt-4o`, `claude-3-5-sonnet`, …) map onto them.
+
+### 7. Upgrading & backup
+
+```bash
+git pull && sudo systemctl restart loomy2api     # or: docker compose up -d --build
+```
+
+Back up `accounts.json` — it holds the accounts, their sessions and (if you
+added them) the passwords, plus the bound device identity of each account.
+`config.json` holds your settings. Both are gitignored.
+
+### 8. Health checks & logs
+
+```bash
+curl -s http://127.0.0.1:17890/health | python -m json.tool   # status + panel URL
+python -m loomy2api accounts                                  # quota per account
+tail -f logs/gateway.log                                      # model/tokens/points per call
+```
+
+The panel (<http://127.0.0.1:17890/panel>) shows the same live, with per-account
+quota and buttons for renew / rebind identity / disable / delete.
+
 ## CLI
 
 ```

@@ -210,6 +210,165 @@ docker run -d --name loomy2api -p 17890:17890 -v $PWD/data:/data loomy2api
 # 把 accounts.json 放进 ./data（容器内即 /data/accounts.json）
 ```
 
+或者用 Compose：
+
+```bash
+mkdir -p data && cp accounts.example.json data/accounts.json
+# 编辑 data/accounts.json 后：
+docker compose up -d --build
+docker compose logs -f
+```
+
+## 部署教程
+
+### 0. 先给账号设个密码
+
+桌面客户端里没有设密码的入口，要去**讯飞账号中心**（网页或手机端）设置一次，
+之后本项目就能长期无人值守地自动续期。没有密码也可以走短信路线：
+
+```bash
+python -m loomy2api sms 13800000000           # 发送验证码
+python -m loomy2api verify main 13800000000 <验证码> <msgid>
+```
+
+### 1. 安装（Windows / Linux / macOS 通用）
+
+```bash
+git clone https://github.com/<you>/loomy2api.git
+cd loomy2api
+
+cp config.example.json config.json      # 可选，默认值就能跑
+cp accounts.example.json accounts.json  # 你的账号写这里
+chmod 600 accounts.json config.json     # 里面有明文密码，权限收紧
+
+python -m loomy2api add main --phone 13800000000 --password '你的密码'
+python -m loomy2api accounts            # 复核：额度 + 登录态剩余天数
+
+python -m loomy2api serve               # http://127.0.0.1:17890
+```
+
+* Python **3.9+**，**零依赖**（纯标准库）。
+* `--port 9000` 换端口；`-c /path/config.json` 指定别的配置文件。
+* 面板：<http://127.0.0.1:17890/panel>
+
+### 2. 常驻运行：Linux（systemd）
+
+```ini
+# /etc/systemd/system/loomy2api.service
+[Unit]
+Description=loomy2api gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=loomy
+WorkingDirectory=/opt/loomy2api
+ExecStart=/usr/bin/python3 -m loomy2api serve
+Restart=always
+RestartSec=5
+UMask=0077                     # accounts.json 里有明文密码
+Environment=LOOMY_HOST=127.0.0.1
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now loomy2api
+journalctl -u loomy2api -f          # 跟日志
+```
+
+### 3. 常驻运行：Windows
+
+任务计划程序（系统自带，无需额外软件）：
+
+```powershell
+# start.cmd
+@echo off
+cd /d D:\loomy2api
+python -m loomy2api serve >> logs\console.log 2>&1
+
+schtasks /create /tn loomy2api /sc onstart /rl highest /tr "D:\loomy2api\start.cmd" /f
+schtasks /run /tn loomy2api
+```
+
+或者用 NSSM 注册成真正的 Windows 服务：
+
+```powershell
+nssm install loomy2api "C:\Python312\python.exe" "-m loomy2api serve"
+nssm set loomy2api AppDirectory D:\loomy2api
+nssm set loomy2api AppStdout D:\loomy2api\logs\service.log
+nssm start loomy2api
+```
+
+### 4. Docker / Compose
+
+```bash
+mkdir -p data && cp accounts.example.json data/accounts.json   # 然后编辑它
+docker compose up -d --build
+docker compose logs -f
+```
+
+镜像就是 `python:3.12-slim` + 源码，没有别的要装。状态（`accounts.json`、`logs/`）
+都在 `./data`，升级就是 `git pull && docker compose up -d --build`。
+
+### 5. 对外提供服务（可选，务必读完）
+
+默认只监听 `127.0.0.1`，只有本机能访问。要在局域网/公网共享：
+
+1. **先设 API Key**。不设的话，谁能连上这个端口就能花你账号的积分：
+
+   ```json
+   { "api_keys": ["sk-换成一串又长又随机的字符串"] }
+   ```
+2. 再设 `LOOMY_HOST=0.0.0.0`（或 config.json 里 `"host": "0.0.0.0"`）。
+3. 公网的话，前面挂一个带 TLS 的反代。Caddy 示例：
+
+   ```
+   api.example.com {
+       reverse_proxy 127.0.0.1:17890
+   }
+   ```
+
+之后客户端就用 `https://api.example.com/v1` 作为 base URL。
+
+> 更推荐用 VPN / Tailscale / WireGuard，而不是直接暴露公网。这个端点自身没有限流，
+> 而且上游账号是你自己的。
+
+### 6. 把客户端接上来
+
+| 客户端 | 填法 |
+|---|---|
+| OpenAI SDK / LangChain | `base_url="http://127.0.0.1:17890/v1"`，`api_key` 随便填（或填你设的 Key） |
+| Cherry Studio / LobeChat / NextChat / Open WebUI | 选「OpenAI 兼容」，base URL 填上面那个 |
+| 沉浸式翻译 / 双语阅读类 | 自定义 OpenAI 接口，同一 base URL |
+| Claude Code | `ANTHROPIC_BASE_URL=http://127.0.0.1:17890`、`ANTHROPIC_API_KEY=<随便>` |
+| curl | 见上面「快速开始」 |
+
+模型名可以直接用上游 id，也可以在 `model_aliases` 里把你习惯的名字
+（`gpt-4o`、`claude-3-5-sonnet` 等）映射过去。
+
+### 7. 升级与备份
+
+```bash
+git pull && sudo systemctl restart loomy2api     # 或 docker compose up -d --build
+```
+
+要备份 `accounts.json`——账号、登录态、（如果你填了）密码、以及每个账号绑定的设备标识
+都在里面。`config.json` 是你的配置。两个文件都已在 .gitignore 里。
+
+### 8. 健康检查与日志
+
+```bash
+curl -s http://127.0.0.1:17890/health | python -m json.tool   # 状态 + 面板地址
+python -m loomy2api accounts                                  # 各账号额度
+tail -f logs/gateway.log                                      # 每次调用的模型/tokens/扣分
+```
+
+面板（<http://127.0.0.1:17890/panel>）能实时看到同样的信息，还带续期 / 换标识 / 禁用 / 删除按钮。
+
 ## 命令行
 
 ```
