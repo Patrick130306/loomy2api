@@ -7,6 +7,7 @@ rotation when one account's session is rejected.
 
 from __future__ import annotations
 
+import io
 import json
 import tempfile
 import threading
@@ -198,6 +199,20 @@ class GatewayTestCase(_Harness, unittest.TestCase):
         self.assertGreater(acc_a.failures, 0)
         self.assertTrue(acc_a.in_cooldown)
 
+    def test_upstream_5xx_does_not_cool_down_the_account(self):
+        """A 504/502 from the upstream is not the account's fault: retry on
+        another account but keep the first one healthy (it did nothing wrong)."""
+        self.upstream.reject_with = {"fake-model": (504, "upstream hiccup")}
+        with self.assertRaises(urllib.error.HTTPError) as ctx:
+            self.post("/v1/chat/completions", {
+                "model": "fake-model", "messages": [{"role": "user", "content": "x"}]})
+        self.assertEqual(ctx.exception.code, 504)
+        self.assertEqual(self.gateway.pool.usable(), self.gateway.pool.accounts)
+        for acc in self.gateway.pool.accounts:
+            self.assertFalse(acc.in_cooldown,
+                             "5xx must not put an account in cooldown")
+            self.assertTrue(acc.session_valid, "5xx must not drop the session")
+
     def test_rotation_when_account_quota_exhausted(self):
         self.upstream.exhausted_sessions = ["s1", "s2"]
         with self.assertRaises(urllib.error.HTTPError) as ctx:
@@ -263,6 +278,49 @@ class AuthTestCase(_Harness, unittest.TestCase):
     def test_health_stays_public(self):
         status, _payload = self.get("/health")
         self.assertEqual(status, 200)
+
+    def test_bare_authorization_without_bearer(self):
+        """Some clients send the raw key as the Authorization value."""
+        status, _body, _ = self.post(
+            "/v1/chat/completions",
+            {"model": "fake-model", "messages": [{"role": "user", "content": "x"}]},
+            headers={"Authorization": "secret-key"})
+        self.assertEqual(status, 200)
+
+    def test_query_string_key(self):
+        status, _body, _ = self.post(
+            "/v1/chat/completions?api_key=secret-key",
+            {"model": "fake-model", "messages": [{"role": "user", "content": "x"}]})
+        self.assertEqual(status, 200)
+
+    def test_key_with_stray_whitespace_or_quotes(self):
+        # (a raw newline can't be sent by urllib and no real client does it,
+        #  but trailing spaces and quotes from copy-paste are common)
+        for raw in (' "secret-key" ', "bearer secret-key ", " secret-key\t"):
+            status, _body, _ = self.post(
+                "/v1/chat/completions",
+                {"model": "fake-model", "messages": [{"role": "user", "content": "x"}]},
+                headers={"Authorization": raw})
+            self.assertEqual(status, 200, f"rejected: {raw!r}")
+
+    def test_wrong_key_rejected_and_logged(self):
+        buf = io.StringIO()
+        original = self.gateway.log
+        self.gateway.log = lambda msg, **kw: (buf.write(str(msg) + "\n"), original(msg))[1]
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as ctx:
+                self.post("/v1/chat/completions",
+                          {"model": "fake-model",
+                           "messages": [{"role": "user", "content": "x"}]},
+                          headers={"Authorization": "Bearer wrong-key-123456"})
+        finally:
+            self.gateway.log = original
+        self.assertEqual(ctx.exception.code, 401)
+        logged = buf.getvalue()
+        self.assertIn("[auth] 拒绝", logged)
+        self.assertIn("authorization:bearer", logged)
+        self.assertIn("wrong-ke…", logged)          # masked, not the full secret
+        self.assertNotIn("wrong-key-123456", logged)
 
 
 if __name__ == "__main__":

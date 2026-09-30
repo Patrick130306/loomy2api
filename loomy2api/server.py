@@ -114,6 +114,11 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "loomy2api"
     gateway: Gateway = None                        # injected by serve()
 
+    #: Statuses that implicate the *account* (drop its session / cool it down).
+    ACCOUNT_FAULT = (401, 403, 402, 429)
+    #: Statuses where retrying is pointless (the request itself is wrong).
+    FATAL_REQUEST = (400, 404, 422)
+
     def setup(self):                               # noqa: D102
         super().setup()
         self._body_read = False
@@ -204,15 +209,52 @@ class Handler(BaseHTTPRequestHandler):
 
     # --------------------------------------------------------------- auth
 
+    def _presented_key(self) -> Tuple[str, str]:
+        """Pull the caller's key out of whatever shape they sent it in.
+
+        Real clients are all over the place: ``Authorization: Bearer k``,
+        bare ``Authorization: k``, ``x-api-key``, or a query parameter — and
+        some paste a key with stray whitespace/quotes. Accept all of them so a
+        client is never rejected for cosmetics.
+        """
+        from urllib.parse import parse_qs, urlparse as _urlparse
+
+        raw = (self.headers.get("Authorization") or "").strip()
+        if raw:
+            if raw.lower().startswith("bearer "):
+                return raw[7:].strip(), "authorization:bearer"
+            if raw.lower().startswith("token "):
+                return raw[6:].strip(), "authorization:token"
+            return raw, "authorization:raw"
+        for header in ("x-api-key", "api-key", "apikey", "x-goog-api-key"):
+            value = (self.headers.get(header) or "").strip()
+            if value:
+                return value, f"header:{header}"
+        query = parse_qs(_urlparse(self.path).query)
+        for name in ("api_key", "apikey", "key", "access_token"):
+            if query.get(name):
+                return query[name][0].strip(), f"query:{name}"
+        return "", "none"
+
+    @staticmethod
+    def _mask(value: str) -> str:
+        if not value:
+            return "(empty)"
+        if len(value) <= 12:
+            return value[:4] + "…"
+        return f"{value[:8]}…{value[-4:]}(len={len(value)})"
+
     def _authorized(self) -> bool:
         keys = self.gateway.cfg.api_keys
         if not keys:
             return True
-        auth = self.headers.get("Authorization") or ""
-        token = auth[7:].strip() if auth.lower().startswith("bearer ") else ""
-        token = token or (self.headers.get("x-api-key") or "").strip()
-        if token in keys:
+        token, source = self._presented_key()
+        token = token.strip().strip('"').strip("'")
+        if token and token in keys:
             return True
+        # never log the secret itself — just enough to see what arrived
+        self.gateway.log(f"[auth] 拒绝 {self.command} {self.path} ← {source} "
+                         f"token={self._mask(token)}")
         self._error(401, "无效的 API Key / invalid API key", "authentication_error")
         return False
 
@@ -441,9 +483,15 @@ class Handler(BaseHTTPRequestHandler):
                        f"http=200 {human_usage(usage)}")
                 return self._json(200, obj)
             last = (status, data)
-            gw.log(f"[call] {acc.name} {model} http={status} → 换账号重试")
-            gw.pool.report_failure(acc, status, data[:200].decode("utf-8", "replace"))
-            if status in (400, 404, 422):               # not an account problem
+            if status in self.ACCOUNT_FAULT:
+                gw.log(f"[call] {acc.name} {model} http={status} → 账号问题，换账号重试")
+                gw.pool.report_failure(acc, status,
+                                       data[:200].decode("utf-8", "replace"))
+            else:
+                # upstream hiccup (502/504/500) — do NOT punish the account for it
+                gw.log(f"[call] {acc.name} {model} http={status} → 上游异常，换账号重试"
+                       f"（不冷却该账号）")
+            if status in self.FATAL_REQUEST:            # not an account problem
                 break
         status, data = last
         try:
@@ -470,9 +518,14 @@ class Handler(BaseHTTPRequestHandler):
                 break
             data = resp.read()
             conn.close()
-            gw.log(f"[call] {acc.name} {model} stream http={resp.status} → 换账号重试")
-            gw.pool.report_failure(acc, resp.status,
-                                   data[:200].decode("utf-8", "replace"))
+            if resp.status in self.ACCOUNT_FAULT:
+                gw.log(f"[call] {acc.name} {model} stream http={resp.status}"
+                       f" → 账号问题，换账号重试")
+                gw.pool.report_failure(acc, resp.status,
+                                       data[:200].decode("utf-8", "replace"))
+            else:
+                gw.log(f"[call] {acc.name} {model} stream http={resp.status}"
+                       f" → 上游异常，换账号重试（不冷却该账号）")
             conn = resp = None
 
         if resp is None:
@@ -553,8 +606,14 @@ class Handler(BaseHTTPRequestHandler):
                        f"http=200 {human_usage(usage)}")
                 return self._json(200, anth.openai_to_anthropic(obj, model))
             last = (status, data)
-            gw.pool.report_failure(acc, status, data[:200].decode("utf-8", "replace"))
-            if status in (400, 404, 422):
+            if status in self.ACCOUNT_FAULT:
+                gw.pool.report_failure(acc, status,
+                                       data[:200].decode("utf-8", "replace"))
+                gw.log(f"[messages] {acc.name} {model} http={status} → 账号问题，换账号重试")
+            else:
+                gw.log(f"[messages] {acc.name} {model} http={status}"
+                       f" → 上游异常，换账号重试（不冷却该账号）")
+            if status in self.FATAL_REQUEST:
                 break
         status, data = last
         return self._json(status or 502, {
@@ -579,8 +638,14 @@ class Handler(BaseHTTPRequestHandler):
                 break
             data = resp.read()
             conn.close()
-            gw.pool.report_failure(acc, resp.status,
-                                   data[:200].decode("utf-8", "replace"))
+            if resp.status in self.ACCOUNT_FAULT:
+                gw.pool.report_failure(acc, resp.status,
+                                       data[:200].decode("utf-8", "replace"))
+                gw.log(f"[messages] {acc.name} {model} stream http={resp.status}"
+                       f" → 账号问题，换账号重试")
+            else:
+                gw.log(f"[messages] {acc.name} {model} stream http={resp.status}"
+                       f" → 上游异常，换账号重试（不冷却该账号）")
             conn = resp = None
 
         if resp is None:

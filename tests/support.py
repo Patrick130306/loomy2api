@@ -103,6 +103,8 @@ class FakeUpstream:
     def __init__(self):
         self.valid_sessions: Optional[List[str]] = None   # None = accept any
         self.exhausted_sessions: List[str] = []
+        #: model-id substring → (status, message); simulates upstream hiccups
+        self.reject_with: Dict[str, Any] = {}
         self.calls: List[Dict[str, Any]] = []
         self.models_payload = {
             "object": "list",
@@ -198,6 +200,9 @@ class FakeUpstream:
 
                 if path.endswith("/chat/completions"):
                     model = body.get("model", "fake-model")
+                    for needle, (status, message) in fake.reject_with.items():
+                        if needle in str(model):
+                            return fake._reject(self, status, message)
                     if body.get("stream"):
                         return self._stream(model)
                     return fake._send_json(self, {

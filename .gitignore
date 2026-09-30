@@ -3,6 +3,7 @@ config.json
 accounts.json
 session.json
 credentials.json
+api-key.txt
 logs/
 *.log
 _decrypt_env.cjs
