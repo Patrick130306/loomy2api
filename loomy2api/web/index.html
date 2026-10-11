@@ -112,6 +112,18 @@
       <div><button class="primary" id="add">添加并绑定设备标识</button></div>
     </div>
     <div class="hint">密码需要先在讯飞账号中心设置一次；添加成功后会自动为本账号随机生成一套设备标识（devid / 校园设备号）并绑定，之后每次续期都用同一套。</div>
+
+    <h2 style="margin-top:18px">短信验证码登录 <small>sms login</small></h2>
+    <div class="grid">
+      <div><label>手机号 phone</label><input id="sms-phone" placeholder="13800000000"></div>
+      <div><label>验证码 code</label><input id="sms-code" placeholder="短信里的 6 位数字"></div>
+      <div><label>账号名 name（可选）</label><input id="sms-name" placeholder="main"></div>
+      <div class="row" style="gap:8px">
+        <button id="sms-send">发送验证码</button>
+        <button class="primary" id="sms-verify">验证并登录</button>
+      </div>
+    </div>
+    <div class="hint" id="sms-hint">没设过密码、或密码登录被风控时走这里：先点「发送验证码」，收到短信后填进验证码框再点「验证并登录」。验证码 5 分钟内有效；账号名留空则用 <b>main</b>，同名账号会被续期而不是重复添加。</div>
   </section>
 
   <section>
@@ -203,6 +215,7 @@ function render(state) {
       + '<td class="mono" title="' + (id.campus_device_id || '') + '">' + (id.devid || '—') + '</td>'
       + '<td><div class="row" style="gap:6px">'
       + '<button onclick="act(\'renew\',\'' + a.name + '\')">续期</button>'
+      + '<button onclick="act(\'onboarding\',\'' + a.name + '\')" title="一键领取 8 个新手任务（合计 10000 积分，纯接口直领）">领任务</button>'
       + '<button onclick="act(\'identity\',\'' + a.name + '\')">换标识</button>'
       + '<button onclick="act(\'toggle\',\'' + a.name + '\',' + (!a.enabled) + ')">' + (a.enabled ? '禁用' : '启用') + '</button>'
       + '<button class="danger" onclick="act(\'remove\',\'' + a.name + '\')">删除</button>'
@@ -225,17 +238,72 @@ async function act(kind, name, value) {
     identity: ['/api/panel/accounts/identity', {name, regenerate: true}],
     toggle: ['/api/panel/accounts/update', {name, enabled: value}],
     remove: ['/api/panel/accounts/remove', {name}],
+    onboarding: ['/api/panel/onboarding', {name}],
   };
   if (kind === 'remove' && !confirm('确认删除账号 ' + name + '？')) return;
   const [path, body] = map[kind];
   try {
     const res = await api(path, {method: 'POST', body: JSON.stringify(body)});
-    if (res.error) { toast(name + '：' + res.error, 'err'); }
+    if (kind === 'onboarding') {
+      const r = (res.results || [])[0] || {};
+      if (r.ok) {
+        toast(name + ' 领取完成：本次 +' + (r.claimed_points || 0) + ' 积分，累计 '
+              + (r.earned || 0) + '/' + (r.total || 10000), 'ok');
+      } else {
+        toast(name + ' 领取失败：' + (r.error || '未知原因'), 'err');
+      }
+    } else if (res.error) { toast(name + '：' + res.error, 'err'); }
     else if (kind === 'identity') { toast(name + ' 已换新设备标识：' + res.identity.devid, 'ok'); }
     else { toast(name + ' 操作完成', 'ok'); }
     if (res.state) render(res.state); else load();
   } catch (e) {
     toast(name + ' 操作失败：' + e.message, 'err');
+  }
+}
+
+// ── 短信验证码登录（两步：发码 → 用码换 session）
+let smsMsgid = '';
+
+async function smsSend() {
+  const phone = $('sms-phone').value.trim();
+  if (!phone) return toast('先填手机号', 'err');
+  $('sms-send').disabled = true;
+  try {
+    const res = await api('/api/panel/sms/send', {method: 'POST', body: JSON.stringify({loginid: phone})});
+    smsMsgid = res.msgid;
+    $('sms-hint').innerHTML = '验证码已发到 <b>' + phone + '</b>（5 分钟内有效）——'
+      + '把它填进上面的「验证码」框，再点「验证并登录」。';
+    toast('验证码已发送', 'ok');
+  } catch (e) {
+    toast('发送失败：' + e.message, 'err');
+  } finally {
+    $('sms-send').disabled = false;
+  }
+}
+
+async function smsVerify() {
+  const phone = $('sms-phone').value.trim();
+  const code = $('sms-code').value.trim();
+  const name = $('sms-name').value.trim() || 'main';
+  if (!phone) return toast('先填手机号', 'err');
+  if (!code) return toast('先填验证码', 'err');
+  if (!smsMsgid) return toast('请先点「发送验证码」', 'err');
+  $('sms-verify').disabled = true;
+  try {
+    const res = await api('/api/panel/sms/verify', {
+      method: 'POST',
+      body: JSON.stringify({name, loginid: phone, code, msgid: smsMsgid}),
+    });
+    toast((res.created ? '已添加 ' : '已续期 ') + res.name
+          + '（' + (res.days_left === null ? '—' : res.days_left.toFixed(1) + ' 天') + '）', 'ok');
+    $('sms-code').value = '';
+    smsMsgid = '';
+    $('sms-hint').innerHTML = '登录成功。要再登一个账号就重新填手机号并点「发送验证码」。';
+    if (res.state) render(res.state); else load();
+  } catch (e) {
+    toast('登录失败：' + e.message, 'err');
+  } finally {
+    $('sms-verify').disabled = false;
   }
 }
 
@@ -269,6 +337,8 @@ async function loadLog() {
 
 $('refresh').onclick = () => load(true).then(loadLog);
 $('add').onclick = addAccount;
+$('sms-send').onclick = smsSend;
+$('sms-verify').onclick = smsVerify;
 $('loadLog').onclick = loadLog;
 $('saveKey').onclick = () => {
   KEY = $('apiKey').value.trim();

@@ -15,6 +15,8 @@ Endpoints
 ``POST /api/panel/accounts/remove``   delete an account
 ``POST /api/panel/accounts/renew``    force re-login + quota refresh
 ``POST /api/panel/accounts/identity`` inspect / regenerate the account identity
+``POST /api/panel/sms/send``          SMS login step 1: send the code → msgid
+``POST /api/panel/sms/verify``        SMS login step 2: code → session → account
 ``GET  /api/panel/logs``              tail of the gateway log
 """
 
@@ -25,6 +27,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from .account import Account, AccountError
+from .constants import SESSION_EXPIRE_SECONDS
 from .pool import PoolError
 
 __all__ = ["Panel"]
@@ -217,6 +220,91 @@ class Panel:
             self.pool.save(force=True)
         return {"ok": True, "name": name, "identity": acc.identity_view(),
                 "state": self.state()}
+
+    def send_sms(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """SMS login step 1 — send the code, hand the ``msgid`` back to the page.
+
+        The panel keeps the msgid in the browser (it is only valid for 5 minutes)
+        so step 2 can be a separate click without any server-side session state.
+        """
+        phone = str(payload.get("loginid") or payload.get("phone") or "").strip()
+        if not phone:
+            raise PoolError("需要手机号 / phone is required")
+        try:
+            data = self.pool.client.send_sms_code(phone)
+        except AccountError as exc:
+            raise PoolError(f"验证码发送失败：{exc}") from exc
+        record = data.get("data") if isinstance(data.get("data"), dict) else data
+        msgid = str((record or {}).get("msgid") or "").strip()
+        if not msgid:
+            # Never hand back an empty msgid: step 2 would fail with a message
+            # that has nothing to do with the real cause.
+            raise PoolError("短信响应缺少 msgid（请稍后重试）")
+        self.log(f"[panel] 已向 {mask_phone(phone)} 下发短信验证码")
+        return {"ok": True, "phone": phone, "msgid": msgid}
+
+    def verify_sms(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """SMS login step 2 — exchange the code for a session and store the account.
+
+        Creates the account when the name is new, otherwise refreshes the
+        existing one (so "re-login by SMS" works for an expired account too).
+        """
+        name = str(payload.get("name") or "").strip() or "main"
+        phone = str(payload.get("loginid") or payload.get("phone") or "").strip()
+        code = str(payload.get("code") or "").strip()
+        msgid = str(payload.get("msgid") or "").strip()
+        if not phone or not code or not msgid:
+            raise PoolError("手机号 / 验证码 / msgid 都不能为空 / "
+                            "phone, code and msgid are all required")
+        try:
+            got = self.pool.client.login_by_sms(phone, code, msgid)
+        except AccountError as exc:
+            raise PoolError(f"短信登录失败：{exc}") from exc
+
+        acc = self.pool.get(name)
+        created = acc is None
+        if acc is None:
+            acc = self.pool.add_account(name, loginid=phone)
+        acc.session = got["session"]
+        acc.userid = got.get("userid", "") or acc.userid
+        if phone:
+            acc.loginid = phone
+        acc.obtained_at = int(time.time())
+        acc.expire_at = acc.obtained_at + SESSION_EXPIRE_SECONDS
+        acc.cooldown_until = 0.0
+        self.pool.refresh_quota(acc)
+        self.pool.save(force=True)
+        self.log(f"[panel] {name} 短信登录成功 userid={acc.userid} "
+                 f"session={acc.session[:8]}…{'（新建）' if created else '（续期）'}")
+        return {"ok": True, "name": name, "created": created,
+                "userid": acc.userid, "days_left": acc.days_left,
+                "state": self.state()}
+
+    def onboarding(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Claim the eight newbie tasks for one account (or all of them).
+
+        Pure API claim — no model tokens are spent (see ``onboarding.py``).
+        """
+        from .onboarding import claim_for_account
+
+        name = str(payload.get("name") or "").strip()
+        if name:
+            targets = [self.pool.get(name)]
+            if targets[0] is None:
+                raise PoolError(f"没有名为 {name} 的账号 / no such account: {name}")
+        else:
+            targets = list(self.pool.accounts)
+        if not targets:
+            raise PoolError("账号池为空 / account pool is empty")
+
+        results = [claim_for_account(self.pool, acc, log=self.log) for acc in targets]
+        self.pool.save(force=True)
+        return {
+            "ok": all(r.get("ok") for r in results),
+            "results": results,
+            "claimed_points": sum(r.get("claimed_points", 0) for r in results),
+            "state": self.state(),
+        }
 
     def logs(self, lines: int = 200) -> Dict[str, Any]:
         path = self.gw.log.path
