@@ -7,6 +7,7 @@
     loomy2api login [name ...]      log in / refresh sessions
     loomy2api sms <phone>           send an SMS code (SMS login path)
     loomy2api verify <name> <phone> <code> <msgid>
+    loomy2api onboarding [name ...] claim the 8 newbie tasks (10 000 points)
     loomy2api models                list upstream models
     loomy2api quota                 show quota of every account
     loomy2api chat "prompt"         one-shot chat through the gateway
@@ -23,6 +24,7 @@ from typing import List, Optional
 from . import constants as C
 from .config import load_config
 from .account import AccountClient, Account, AccountError
+from .onboarding import ONBOARDING_TOTAL, TASK_POINTS, TASK_TITLES, claim_for_account
 from .pool import AccountPool, PoolError
 from .server import Gateway, Logger, serve
 from .upstream import ModelGateway
@@ -185,6 +187,45 @@ def cmd_identity(cfg, args) -> int:
     return 0
 
 
+def cmd_onboarding(cfg, args) -> int:
+    """Claim the eight newbie tasks — a pure API claim, no model tokens spent."""
+    pool = _pool(cfg)
+    names = list(args.names) or [a.name for a in pool.accounts]
+    if not names:
+        print("账号池为空：先 `loomy2api add` 或 `loomy2api verify` 加一个账号")
+        return 1
+
+    total_points = 0
+    failed = 0
+    for name in names:
+        acc = pool.get(name)
+        if acc is None:
+            print(f"✗ 没有名为 {name} 的账号")
+            failed += 1
+            continue
+        print(f"—— {name} ——")
+        result = claim_for_account(pool, acc, log=print)
+        if not result.get("ok"):
+            print(f"✗ {name}: {result.get('error')}")
+            failed += 1
+            continue
+        for item in result["claimed"]:
+            flag = "（此前已完成，幂等重放）" if item["already_completed"] else ""
+            print(f"  ✓ {item['title']} +{item['points']}{flag}")
+        if result["skipped"]:
+            print(f"  · 已完成跳过 {len(result['skipped'])} 项："
+                  + "、".join(TASK_TITLES.get(k, k) for k in result["skipped"]))
+        for item in result["failed"]:
+            print(f"  ✗ {item['title']}：{item['error']}")
+        total_points += result.get("claimed_points", 0)
+        print(f"  本次 +{result['claimed_points']}，累计 {result['earned']}/{result['total']}")
+    pool.save(force=True)
+    print("-" * 50)
+    print(f"合计本次领取 {total_points} 积分（满分 {ONBOARDING_TOTAL}）"
+          + (f"，{failed} 个账号失败" if failed else ""))
+    return 1 if failed else 0
+
+
 def cmd_models(cfg, args) -> int:
     pool = _pool(cfg)
     client = ModelGateway(cfg)
@@ -284,6 +325,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("code")
     p.add_argument("msgid")
     p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("onboarding", help="领取新手任务（8 项，合计 10000 积分）")
+    p.add_argument("names", nargs="*", help="账号名（缺省=全部）")
+    p.set_defaults(func=cmd_onboarding)
 
     p = sub.add_parser("identity", help="查看/重绑账号的设备标识")
     p.add_argument("name")

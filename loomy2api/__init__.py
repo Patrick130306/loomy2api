@@ -19,6 +19,14 @@ __version__ = "1.0.0"
 
 from .account import Account, AccountClient, AccountError      # noqa: F401
 from .config import Config, load_config, PROJECT_ROOT          # noqa: F401
+from .onboarding import (                                      # noqa: F401
+    ONBOARDING_TOTAL,
+    TASK_POINTS,
+    TASK_TITLES,
+    OnboardingError,
+    claim_all,
+    claim_for_account,
+)
 from .pool import AccountPool, PoolError                       # noqa: F401
 from .server import Gateway, Logger, serve                     # noqa: F401
 from .upstream import ModelGateway, UpstreamError              # noqa: F401
@@ -30,4 +38,6 @@ __all__ = [
     "Config", "load_config", "PROJECT_ROOT",
     "Gateway", "Logger", "serve",
     "ModelGateway", "UpstreamError",
+    "ONBOARDING_TOTAL", "TASK_POINTS", "TASK_TITLES",
+    "OnboardingError", "claim_all", "claim_for_account",
 ]

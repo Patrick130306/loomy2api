@@ -353,6 +353,9 @@ class Handler(BaseHTTPRequestHandler):
             "/api/panel/accounts/remove": panel.remove_account,
             "/api/panel/accounts/renew": panel.renew_account,
             "/api/panel/accounts/identity": panel.identity,
+            "/api/panel/sms/send": panel.send_sms,
+            "/api/panel/sms/verify": panel.verify_sms,
+            "/api/panel/onboarding": panel.onboarding,
             "/api/panel/refresh": lambda _p: panel.refresh(_p),
         }
         handler = handlers.get(path)
