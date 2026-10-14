@@ -119,6 +119,13 @@ class Handler(BaseHTTPRequestHandler):
     #: Statuses where retrying is pointless (the request itself is wrong).
     FATAL_REQUEST = (400, 404, 422)
 
+    def handle_one_request(self):                  # noqa: D102
+        # On a keep-alive connection the same handler instance serves every
+        # request; reset the body flag or request #2+ would see an empty
+        # body (setup() only runs once per connection).
+        self._body_read = False
+        super().handle_one_request()
+
     def setup(self):                               # noqa: D102
         super().setup()
         self._body_read = False
